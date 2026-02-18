@@ -18,6 +18,14 @@ return [
         'key' => env('POSTMARK_API_KEY'),
     ],
 
+    'employee' => [
+    'api_a_url' => env('EMP_API_A_URL'),
+    'api_b_url' => env('EMP_API_B_URL'),
+    'api_auth'  => env('API_AUTH', 'none'),   // basic | bearer | none
+    'api_secret'=> env('API_SECRET', null),
+    ],
+
+
     'resend' => [
         'key' => env('RESEND_API_KEY'),
     ],

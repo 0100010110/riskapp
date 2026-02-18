@@ -2,15 +2,21 @@
 
 namespace App\Api\SSO;
 
-use Illuminate\Support\Facades\Http;
-
 class Authentication extends SSO
 {
-    protected static $uri = "/authenticate";
+    protected static string $uri = '/authenticate';
 
-    public static function authenticate($token)
+    public static function authenticate(string $token): object|array|null
     {
-        $response = self::base()->withHeader('auth', $token)->get(self::$uri);
+        $response = self::base()
+            // tetap pakai header "auth" sesuai implementasi kamu sekarang:
+            ->withHeaders([
+                'auth' => $token,
+            ])
+            // optional: kalau SSO kamu sebenarnya pakai Authorization: Bearer
+            // ->withToken($token)
+            ->get(self::$uri);
+
         return static::responseHandler($response, null);
     }
 }

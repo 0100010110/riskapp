@@ -3,14 +3,11 @@
 namespace App\Http\Controllers;
 
 use App\Api\SSO\Authentication;
-use App\Http\Resources\UserResource;
-use App\Models\Employee;
 use App\Models\User;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Hash;
 use Laravel\Socialite\Facades\Socialite;
+use Laravel\Socialite\Two\InvalidStateException;
 
 class LoginController extends Controller
 {
@@ -19,34 +16,45 @@ class LoginController extends Controller
         return Socialite::driver('keycloak')->redirect();
     }
 
-    public function redirect()
+    public function redirect(Request $request)
     {
-        if (!Auth::check()) {
-            $keycloak = Socialite::driver('keycloak')->user();
+        if (! Auth::check()) {
+            try {
+                $keycloak = Socialite::driver('keycloak')->user();
+            } catch (InvalidStateException $e) {
+                $request->session()->invalidate();
+                $request->session()->regenerateToken();
 
-            Cache::put('id_token_hint', $keycloak->accessTokenResponseBody['id_token']);
+                $keycloak = Socialite::driver('keycloak')->stateless()->user();
+            }
+
+            $idToken = data_get($keycloak, 'accessTokenResponseBody.id_token');
+            if ($idToken) {
+                $request->session()->put('id_token_hint', $idToken);
+            }
+
             $response = Authentication::authenticate($keycloak->token);
 
-            if (!$response) {
-                $redirectUri = route('auth.unauthorized');
-                return $this->logout($redirectUri);
+            if (! $response) {
+                return $this->logout($request, route('auth.unauthorized'));
             }
 
             $user = User::where('keycloak_id', $keycloak->id)->first();
-            if ($user && $user->id != $response->id) {
-                $user->update([
-                    'id' => $response->id,
-                    'nik' => $response->nik,
-                    'name' => $response->name,
-                    'email' => $keycloak['email'],
-                ]);
-            } else if (!$user) {
+
+            if ($user) {
+                $user->forceFill([
+                    'id'    => $response->id,
+                    'nik'   => $response->nik,
+                    'name'  => $response->name,
+                    'email' => $keycloak->getEmail(),
+                ])->save();
+            } else {
                 $user = User::create([
                     'keycloak_id' => $keycloak->id,
-                    'id' => $response->id,
-                    'nik' => $response->nik,
-                    'name' => $response->name,
-                    'email' => $keycloak['email'],
+                    'id'          => $response->id,
+                    'nik'         => $response->nik,
+                    'name'        => $response->name,
+                    'email'       => $keycloak->getEmail(),
                 ]);
             }
 
@@ -54,32 +62,35 @@ class LoginController extends Controller
             $user->save();
 
             Auth::login($user);
+            $request->session()->regenerate();
         }
-        return redirect()->route('filament.app.pages.dashboard');
-        // return redirect()->intended(route('filament.app.pages.dashboard'));
+
+        return redirect()->intended(url('/'));
     }
 
-    public function logout($redirectUri = null)
+    public function logout(Request $request, ?string $redirectUri = null)
     {
-        if (auth()->user()?->role === 'SADM') {
-            Auth::logout();
-            return redirect(route('home'));
-        } else {
-            if (!$redirectUri) {
-                $redirectUri = route('home');
-            }
+        $redirectUri ??= route('home');
 
-            $client_id = env('KEYCLOAK_CLIENT_ID');
-            $id_token = Cache::get('id_token_hint');
+        $role = Auth::user()?->role;
 
-            Cache::forget('id_token_hint');
+        $idToken = $request->session()->pull('id_token_hint');
 
-            Auth::logout();
+        Auth::logout();
 
-            $logoutUrl = Socialite::driver('keycloak')->getLogoutUrl($redirectUri, $client_id, $id_token);
+        $request->session()->invalidate();
+        $request->session()->regenerateToken();
 
-            return redirect($logoutUrl);
+        if ($role === 'SADM') {
+            return redirect($redirectUri);
         }
+
+        $clientId = env('KEYCLOAK_CLIENT_ID');
+
+        $logoutUrl = Socialite::driver('keycloak')
+            ->getLogoutUrl($redirectUri, $clientId, $idToken);
+
+        return redirect($logoutUrl);
     }
 
     public function unauthorized()

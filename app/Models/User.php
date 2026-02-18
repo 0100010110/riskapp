@@ -39,4 +39,11 @@ class User extends Authenticatable implements FilamentUser, HasAvatar
     {
         return null;
     }
+
+    public function getFilamentName(): string
+    {
+        $name = $this->name ?? 'User';
+        return "{$name} ({$this->id})";
+    }
+
 }

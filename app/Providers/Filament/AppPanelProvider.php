@@ -3,11 +3,10 @@
 namespace App\Providers\Filament;
 
 use App\Http\Middlewares\Authenticate;
-use App\Http\Middlewares\Authenticated;
+use Filament\Actions\Action;
 use Filament\Http\Middleware\AuthenticateSession;
 use Filament\Http\Middleware\DisableBladeIconComponents;
 use Filament\Http\Middleware\DispatchServingFilamentEvent;
-use Filament\Pages\Dashboard;
 use Filament\Panel;
 use Filament\PanelProvider;
 use Filament\Support\Colors\Color;
@@ -28,18 +27,40 @@ class AppPanelProvider extends PanelProvider
             ->default()
             ->id('app')
             ->path('')
+            ->favicon(asset('favicon.ico'))
             ->login()
+            ->brandName('')
+
             ->colors([
                 'primary' => Color::Amber,
             ])
-            ->discoverResources(in: app_path('Filament/Resources'), for: 'App\Filament\Resources')
-            ->discoverPages(in: app_path('Filament/Pages'), for: 'App\Filament\Pages')
-            ->pages([])
-            ->discoverWidgets(in: app_path('Filament/Widgets'), for: 'App\Filament\Widgets')
+
+            ->globalSearch(false)
+
+            ->navigationGroups([
+                'Risk',
+                'LED',
+                'Skala',
+                'Settings',
+            ])
+
+            ->discoverResources(in: app_path('Filament/Resources'), for: 'App\\Filament\\Resources')
+            ->discoverPages(in: app_path('Filament/Pages'), for: 'App\\Filament\\Pages')
+            ->discoverWidgets(in: app_path('Filament/Widgets'), for: 'App\\Filament\\Widgets')
+
             ->widgets([
                 AccountWidget::class,
                 FilamentInfoWidget::class,
             ])
+
+            ->userMenuItems([
+                'logout' => fn (Action $action) => $action
+                    ->label('Sign out')
+                    ->icon('heroicon-o-arrow-left-on-rectangle')
+                    ->url(fn (): string => route('filament.app.auth.logout'))
+                    ->postToUrl(),
+            ])
+
             ->middleware([
                 EncryptCookies::class,
                 AddQueuedCookiesToResponse::class,
@@ -50,7 +71,6 @@ class AppPanelProvider extends PanelProvider
                 SubstituteBindings::class,
                 DisableBladeIconComponents::class,
                 DispatchServingFilamentEvent::class,
-
             ])
             ->authMiddleware([
                 Authenticate::class,
