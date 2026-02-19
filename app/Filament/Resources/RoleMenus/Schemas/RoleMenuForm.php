@@ -127,9 +127,6 @@ class RoleMenuForm
         $set('c_action', $arr);
     }
 
-    /**
-     * Jika menu bukan special approval tapi A(16) dicentang, paksa menu jadi Risk Approval.
-     */
     protected static function forceMenuToRiskApprovalIfNeeded(Set $set, Get $get): void
     {
         $menuId = (int) ($get('i_id_menu') ?? 0);
@@ -138,7 +135,6 @@ class RoleMenuForm
             return;
         }
 
-        // Loss Event Approval & Risk Approval boleh punya A tanpa dipaksa
         if (self::isSpecialApprovalMenu($menuId)) {
             return;
         }
@@ -242,10 +238,8 @@ class RoleMenuForm
                                     ->columnSpan(5)
                                     ->live()
 
-                                    // INI PENTING: walau disabled, tetap dikirim saat save
                                     ->dehydrated(true)
 
-                                    // Disable hanya ketika A dicentang & menu bukan special approval
                                     ->disabled(fn (Get $get): bool =>
                                         self::stateHasApprove($get('c_action'))
                                         && ! self::isSpecialApprovalMenu($get('i_id_menu'))
@@ -255,38 +249,32 @@ class RoleMenuForm
                                     ->afterStateHydrated(function (Get $get, Set $set): void {
                                         $menuId = (int) ($get('i_id_menu') ?? 0);
 
-                                        // Jika menu = Loss Event Approval / Risk Approval => wajib A(16)
                                         if (self::isSpecialApprovalMenu($menuId)) {
                                             self::ensureApproveAction($set, $get);
                                             return;
                                         }
 
-                                        // legacy: jika A dicentang pada menu lain => paksa ke Risk Approval
                                         self::forceMenuToRiskApprovalIfNeeded($set, $get);
                                     })
 
                                     ->afterStateUpdated(function ($state, Set $set, Get $get): void {
                                         $menuId = (int) ($state ?? 0);
 
-                                        // Jika pilih menu Loss Event Approval / Risk Approval => auto A(16)
                                         if (self::isSpecialApprovalMenu($menuId)) {
                                             self::ensureApproveAction($set, $get);
                                             return;
                                         }
 
-                                        // Jika A sudah dicentang dan menu bukan special => paksa Risk Approval
                                         self::forceMenuToRiskApprovalIfNeeded($set, $get);
                                     })
 
                                     ->dehydrateStateUsing(function ($state, Get $get) {
                                         $menuId = (int) ($state ?? 0);
 
-                                        // Special menu jangan ditimpa
                                         if (self::isSpecialApprovalMenu($menuId)) {
                                             return $state;
                                         }
 
-                                        // legacy: A => paksa Risk Approval
                                         if (self::stateHasApprove($get('c_action'))) {
                                             return self::riskApprovalMenuId() ?? $state;
                                         }
@@ -333,7 +321,6 @@ class RoleMenuForm
                                     ->afterStateUpdated(function ($state, Set $set, Get $get): void {
                                         $menuId = (int) ($get('i_id_menu') ?? 0);
 
-                                        // Jika menu special approval, A tidak boleh dilepas
                                         if (self::isSpecialApprovalMenu($menuId)) {
                                             if (! self::stateHasApprove($state)) {
                                                 self::ensureApproveAction($set, $get);
@@ -341,7 +328,6 @@ class RoleMenuForm
                                             return;
                                         }
 
-                                        // legacy: jika A dicentang di menu lain => paksa menu ke Risk Approval
                                         if (self::stateHasApprove($state)) {
                                             $forcedId = self::riskApprovalMenuId();
                                             if ($forcedId) {

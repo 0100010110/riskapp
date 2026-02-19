@@ -198,7 +198,6 @@ class LossEventApprovalRoleMaskWidget extends Widget implements HasForms
                 }
             }
         } catch (\Throwable) {
-            // ignore
         }
 
         $prefixes = array_values(array_unique(array_filter($prefixes)));

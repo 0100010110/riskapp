@@ -68,7 +68,6 @@ class LossEventForm
                             ->placeholder('Contoh: 1000')
                             ->columnSpanFull(),
 
-                        // status: autofill & lock
                         Hidden::make('c_lostevent_status')
                             ->default(fn (?Tmlostevent $record) => (int) ($record?->c_lostevent_status ?? Tmlostevent::STATUS_DRAFT))
                             ->dehydrated(true),

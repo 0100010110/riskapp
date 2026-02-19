@@ -16,8 +16,6 @@ class LossEventApprovalWorkflow
     public const STATUS_APPROVED_KADIV   = 15;
     public const STATUS_PENGAJUAN_ADMIN  = 16;
     public const STATUS_APPROVED_FINAL   = 17;
-
-    // ✅ session key khusus Loss Event Approval
     public const SESSION_SIM_KEY = 'loss_event_approval.simulate';
 
     /** @var array<string,mixed>|null */
@@ -60,7 +58,6 @@ class LossEventApprovalWorkflow
             $roleType = RiskApprovalWorkflow::ROLE_TYPE_SUPERADMIN;
         }
 
-        // admin/approval GRC selalu GR
         if (in_array($roleType, [
             RiskApprovalWorkflow::ROLE_TYPE_ADMIN_GRC,
             RiskApprovalWorkflow::ROLE_TYPE_APPROVAL_GRC,
@@ -68,7 +65,6 @@ class LossEventApprovalWorkflow
             $orgPrefix = 'GR';
         }
 
-        // kalau pilih superadmin -> lebih aman: clear simulate
         if ($roleType === RiskApprovalWorkflow::ROLE_TYPE_SUPERADMIN) {
             static::clearSimulateState();
             return;
@@ -95,11 +91,7 @@ class LossEventApprovalWorkflow
         static::flushContext();
     }
 
-    /**
-     * Context Loss Event Approval:
-     * - default pakai RiskApprovalWorkflow::context()
-     * - jika REAL superadmin, boleh override (masking) dari session loss_event_approval.simulate
-     */
+   
     public static function context(): array
     {
         if (static::$cachedContext !== null) {
@@ -108,7 +100,6 @@ class LossEventApprovalWorkflow
 
         $base = RiskApprovalWorkflow::context();
 
-        // ✅ FIX UTAMA: pakai checker real superadmin yang pasti ada
         if (! RiskApprovalWorkflow::isRealSuperadmin()) {
             return static::$cachedContext = $base;
         }
@@ -141,7 +132,6 @@ class LossEventApprovalWorkflow
             $simDiv = 'GR';
         }
 
-        // override: seolah-olah bukan superadmin (agar scope jalan sesuai role)
         $base['is_superadmin'] = false;
         $base['impersonating'] = true;
         $base['role_type']     = $simRole;
@@ -175,7 +165,6 @@ class LossEventApprovalWorkflow
         return (string) (static::context()['org_prefix'] ?? '');
     }
 
-    /** Scope untuk menu Loss Event biasa (lihat data sesuai role) */
     public static function applyLossEventEntryScope(Builder $query): Builder
     {
         $ctx = static::context();
@@ -203,7 +192,6 @@ class LossEventApprovalWorkflow
         };
     }
 
-    /** Scope list approval: status actionable OR kontribusi */
     public static function applyApprovalListScope(Builder $query): Builder
     {
         $ctx = static::context();
@@ -218,7 +206,6 @@ class LossEventApprovalWorkflow
 
         $tbl = (new Tmlostevent())->getTable();
 
-        // base visibility (RSA: sendiri, Officer/Kadiv: divisi, GRC: semua)
         $query = match ($role) {
             RiskApprovalWorkflow::ROLE_TYPE_RSA_ENTRY => $query->where("{$tbl}.i_entry", $uid),
 
@@ -236,27 +223,23 @@ class LossEventApprovalWorkflow
         $actionable = static::actionableStatusesForCurrentUser();
 
         return $query->where(function (Builder $w) use ($actionable, $uid, $tbl) {
-            // ✅ actionable statuses
+           
             if (! empty($actionable)) {
                 $w->whereIn("{$tbl}.c_lostevent_status", $actionable);
             } else {
                 $w->whereRaw('1=0');
             }
 
-            // ✅ kontribusi via activity_log (FIX: log_name Lostevent + exclude created)
-            if ($uid > 0) {
+           if ($uid > 0) {
                 $w->orWhereExists(function ($sq) use ($uid, $tbl) {
                     $sq->select(DB::raw(1))
                         ->from('activity_log as al')
                         ->whereColumn('al.subject_id', "{$tbl}.i_id_lostevent")
                         ->where(function ($x) {
-                            // utama: subject_type
                             $x->where('al.subject_type', Tmlostevent::class)
-                              // fallback: log_name (di log kamu: "Lostevent")
                               ->orWhereRaw('LOWER(al.log_name) IN (?, ?)', ['lostevent', 'tmlostevent']);
                         })
                         ->where('al.causer_id', $uid)
-                        // ⛔ jangan anggap "created" sebagai kontribusi
                         ->where(function ($x) {
                             $x->whereNull('al.event')
                               ->orWhere('al.event', '!=', 'created');

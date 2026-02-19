@@ -51,7 +51,6 @@ class ViewRisk extends ViewRecord
                 ->url(function () use ($record, $from) {
                     $url = RiskResource::getUrl('edit', ['record' => $record]);
 
-                    // ✅ penting: bawa context approval agar user tanpa READ tetap bisa edit
                     if ($from === 'approval') {
                         $url .= '?from=approval';
                     }

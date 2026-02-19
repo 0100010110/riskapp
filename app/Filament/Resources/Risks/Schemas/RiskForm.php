@@ -42,7 +42,6 @@ class RiskForm
             return true;
         }
 
-        // top fields dikunci setelah tahap 1 approved
         return $record !== null && self::status($record) >= self::STATUS_TAHAP1_APPROVED;
     }
 

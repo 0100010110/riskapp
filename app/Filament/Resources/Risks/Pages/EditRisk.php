@@ -41,13 +41,11 @@ class EditRisk extends EditRecord
 
         $from = strtolower(trim((string) request()->query('from', '')));
 
-        // ✅ SPECIAL RULE: edit dari approval cukup UPDATE (4), tidak butuh READ (1)
         if ($from === 'approval' && RiskApprovalWorkflow::canEditRiskOnApproval($record)) {
             abort_unless(static::getResource()::canEdit($record), 403);
             return;
         }
 
-        // normal behaviour (akan butuh canEdit + akses normal resource)
         parent::authorizeAccess();
     }
 

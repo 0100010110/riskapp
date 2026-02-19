@@ -26,7 +26,6 @@ class LossEventApprovalsTable
 
         return $table
             ->query(function () use ($lostTable): Builder {
-                // ✅ apply scope approval sesuai role (termasuk simulasi/masking)
                 $q = Tmlostevent::query();
                 $q = LossEventApprovalWorkflow::applyApprovalListScope($q);
 
@@ -39,7 +38,6 @@ class LossEventApprovalsTable
                     ->orderByDesc($lostTable . '.i_id_lostevent');
             })
 
-            // ✅ Hilangkan klik row => edit/view
             ->recordUrl(null)
             ->recordAction(null)
             ->recordActions([])

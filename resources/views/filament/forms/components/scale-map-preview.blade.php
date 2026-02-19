@@ -184,7 +184,6 @@
             {{-- Area grid --}}
             <div style="width: 100%;">
                 @php
-                    // set CSS var untuk jumlah kolom
                     $gridStyle = '--hm-cols:' . $colsCount . ';';
                 @endphp
 
