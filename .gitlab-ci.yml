@@ -11,6 +11,7 @@ cache:
     - vendor/
     # - node_modules/
 
+
 init:
   stage: init
   script:
@@ -34,6 +35,7 @@ dev-build:
     - docker rmi repo.indonesian-aerospace.com/dev-apps/risk-mgmt-app:latest
   only:
     - development_83
+
 
 dev-deploy:
   stage: deploy
