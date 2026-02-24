@@ -82,7 +82,7 @@
     "repositories": [
         {
             "type": "composer",
-            "url": "https://php-compo:repo-php123@repo.indonesian-aerospace.com:8081/repository/composer_group/"
+            "url": "https://php-compo:repo-php123@repo.indonesian-aerospace.com/repository/composer_group/"
         },
         {
             "packagist.org": false
