@@ -1,0 +1,105 @@
+image: repo.indonesian-aerospace.com/custom-base/php8.3-laravel
+
+stages:
+  - init
+  - build
+  - staging
+  - deploy
+
+cache:
+  paths:
+    - vendor/
+    # - node_modules/
+
+init:
+  stage: init
+  script:
+    - composer update
+    # - npm install
+    # - npm run build
+  only:
+    - development_83
+    - test_83
+    - /-RELEASE$/
+
+dev-build:
+  stage: build
+  image: repo.indonesian-aerospace.com/docker:20.10.16
+  before_script:
+    - mkdir -p $HOME/.docker
+    - echo $DOCKER_AUTH_CONFIG > $HOME/.docker/config.json
+  script:
+    - docker build -t repo.indonesian-aerospace.com/dev-apps/risk-mgmt-app:latest .
+    - docker push repo.indonesian-aerospace.com/dev-apps/risk-mgmt-app:latest
+    - docker rmi repo.indonesian-aerospace.com/dev-apps/risk-mgmt-app:latest
+  only:
+    - development_83
+
+dev-deploy:
+  stage: deploy
+  cache: []
+  before_script:
+    - eval $(ssh-agent -s)
+    - echo "$SSH_KEY_DEV" | tr -d '\r' | ssh-add -
+    - mkdir -p ~/.ssh
+    - chmod 700 ~/.ssh
+    - '[[ -f /.dockerenv ]] && echo -e "Host *\n\tStrictHostKeyChecking no\n\n" > ~/.ssh/config'
+  script:
+    - ssh $SSH_DEV "cd ~/project/risk-mgmt-app && ./shutdown && ./startup"
+  only:
+    - development_83
+
+test-build:
+  stage: build
+  image: repo.indonesian-aerospace.com/docker:20.10.16
+  before_script:
+    - mkdir -p $HOME/.docker
+    - echo $DOCKER_AUTH_CONFIG > $HOME/.docker/config.json
+  script:
+    - docker build -t repo.indonesian-aerospace.com/test-apps/risk-mgmt-app:latest .
+    - docker push repo.indonesian-aerospace.com/test-apps/risk-mgmt-app:latest
+    - docker rmi repo.indonesian-aerospace.com/test-apps/risk-mgmt-app:latest
+  only:
+    - test_83
+
+test-deploy:
+  stage: deploy
+  cache: []
+  before_script:
+    - eval $(ssh-agent -s)
+    - echo "$SSH_KEY_TEST" | tr -d '\r' | ssh-add -
+    - mkdir -p ~/.ssh
+    - chmod 700 ~/.ssh
+    - '[[ -f /.dockerenv ]] && echo -e "Host *\n\tStrictHostKeyChecking no\n\n" > ~/.ssh/config'
+  script:
+    - ssh $SSH_TEST "cd ~/project/risk-mgmt-app && ./shutdown && ./startup"
+  only:
+    - test_83
+
+prod-build:
+  stage: build
+  image: repo.indonesian-aerospace.com/docker:20.10.16
+  before_script:
+    - mkdir -p $HOME/.docker
+    - echo $DOCKER_AUTH_CONFIG > $HOME/.docker/config.json
+  script:
+    - docker build -t repo.indonesian-aerospace.com/prod-apps/risk-mgmt-app:latest .
+    - docker push repo.indonesian-aerospace.com/prod-apps/risk-mgmt-app:latest
+    - docker rmi repo.indonesian-aerospace.com/prod-apps/risk-mgmt-app:latest
+  only:
+    - /-RELEASE$/
+
+prod-deploy:
+  stage: deploy
+  cache: []
+  before_script:
+    - eval $(ssh-agent -s)
+    - echo "$SSH_KEY_PROD" | tr -d '\r' | ssh-add -
+    - mkdir -p ~/.ssh
+    - chmod 700 ~/.ssh
+    - '[[ -f /.dockerenv ]] && echo -e "Host *\n\tStrictHostKeyChecking no\n\n" > ~/.ssh/config'
+  script:
+    - ssh $SSH_PROD "cd ~/project/risk-mgmt-app && ./shutdown && ./startup"
+  only:
+    - /-RELEASE$/
+

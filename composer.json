@@ -79,14 +79,24 @@
             "dont-discover": []
         }
     },
+    "repositories": [
+        {
+            "type": "composer",
+            "url": "http://php-compo:repo-php123@repository.indonesian-aerospace.com:8081/repository/composer_group/"
+        },
+        {
+            "packagist.org": false
+        }
+    ],
     "config": {
         "optimize-autoloader": true,
         "preferred-install": "dist",
         "sort-packages": true,
         "allow-plugins": {
-            "pestphp/pest-plugin": true,
-            "php-http/discovery": true
-        }
+            "pestphp/pest-plugin": false,
+            "php-http/discovery": false
+        },
+        "secure-http": false
     },
     "minimum-stability": "stable",
     "prefer-stable": true
