@@ -7,9 +7,11 @@ use App\Filament\Resources\Roles\Pages;
 use App\Filament\Resources\Roles\Schemas\RoleForm;
 use App\Filament\Resources\Roles\Tables\RolesTable;
 use App\Models\Trrole;
+use App\Support\RoleCatalog;
 use BackedEnum;
 use Filament\Schemas\Schema;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Model;
 use UnitEnum;
 
 class RoleResource extends BaseResource
@@ -41,5 +43,25 @@ class RoleResource extends BaseResource
             'create' => Pages\CreateRole::route('/create'),
             'edit'   => Pages\EditRole::route('/{record}/edit'),
         ];
+    }
+
+    
+    public static function canEdit(Model $record): bool
+    {
+        if ($record instanceof Trrole && RoleCatalog::isSuperadminRole($record)) {
+            return false;
+        }
+
+        return parent::canEdit($record);
+    }
+
+   
+    public static function canDelete(Model $record): bool
+    {
+        if ($record instanceof Trrole && RoleCatalog::isSuperadminRole($record)) {
+            return false;
+        }
+
+        return parent::canDelete($record);
     }
 }

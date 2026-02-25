@@ -7,32 +7,17 @@ use App\Models\Trmenu;
 use App\Models\Trrolemenu;
 use App\Models\Truserrole;
 use App\Models\User;
+use App\Policies\SuperadminPolicy;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Str;
 
 class RolePermissionService
 {
     public function isSuperuser(?User $user = null): bool
-{
-    $user ??= Auth::user();
-    if (! $user) {
-        return false;
+    {
+        $user ??= Auth::user();
+        return SuperadminPolicy::isSuperadmin($user);
     }
-
-    // user 2542 superadmin
-    if ((int) $user->id === 2542) {
-        return true;
-    }
-
-    $raw = (string) env('SUPERUSER_IDS', '');
-    $ids = collect(array_filter(array_map('trim', explode(',', $raw))))
-        ->map(fn ($v) => (int) $v)
-        ->filter(fn ($v) => $v > 0)
-        ->all();
-
-    return in_array((int) $user->id, $ids, true);
-}
-
 
     public function actionForMenu(string|array $menuIdentifiers, ?User $user = null): int
     {
@@ -188,7 +173,6 @@ class RolePermissionService
 
         if ($isRiskApprovalMenu && $hasApprove) {
             $mask |= (PermissionHelper::CREATE | PermissionHelper::READ | PermissionHelper::UPDATE);
-
             $mask &= ~PermissionHelper::DELETE;
         }
 

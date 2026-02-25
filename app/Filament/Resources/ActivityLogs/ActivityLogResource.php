@@ -5,7 +5,7 @@ namespace App\Filament\Resources\ActivityLogs;
 use App\Filament\Resources\ActivityLogs\Pages\ListActivityLogs;
 use App\Filament\Resources\ActivityLogs\Tables\ActivityLogsTable;
 use App\Filament\Resources\BaseResource;
-use App\Services\RolePermissionService;
+use App\Policies\SuperadminPolicy;
 use BackedEnum;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Model;
@@ -28,19 +28,10 @@ class ActivityLogResource extends BaseResource
 
     protected static ?int $navigationSort = 999;
 
-    /**
-     * Superadmin user 2542.
-     */
     public static function canViewAny(): bool
     {
         $user = auth()->user();
-        $uid = (int) ($user?->getAuthIdentifier() ?? 0);
-
-        if ($uid === 2542) {
-            return true;
-        }
-
-        return app(RolePermissionService::class)->isSuperuser($user);
+        return SuperadminPolicy::isSuperadmin($user);
     }
 
     public static function canView(Model $record): bool

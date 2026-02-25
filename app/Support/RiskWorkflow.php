@@ -4,8 +4,8 @@ namespace App\Support;
 
 use App\Models\Trrole;
 use App\Models\Truserrole;
+use App\Policies\SuperadminPolicy;
 use App\Services\EmployeeCacheService;
-use App\Services\RolePermissionService;
 use Filament\Facades\Filament;
 use Illuminate\Database\Eloquent\Builder;
 
@@ -37,15 +37,12 @@ class RiskWorkflow
         $user = Filament::auth()?->user();
         $userId = (int) ($user?->getAuthIdentifier() ?? 0);
 
+        // ✅ Pindah ke policy (tidak hardcode lagi di sini)
         $isSuperadmin = false;
         try {
-            $isSuperadmin = RolePermissionService::isSuperuser();
+            $isSuperadmin = SuperadminPolicy::isSuperadmin($user);
         } catch (\Throwable) {
             $isSuperadmin = false;
-        }
-
-        if (! $isSuperadmin && $userId === 2542) {
-            $isSuperadmin = true;
         }
 
         $roleType = self::ROLE_UNKNOWN;
