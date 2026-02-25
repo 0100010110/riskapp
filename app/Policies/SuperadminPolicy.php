@@ -13,7 +13,7 @@ class SuperadminPolicy
             return false;
         }
 
-        // 1) By name keyword (prioritas tinggi)
+        // 1) By name keyword 
         $name = strtolower(trim((string) ($user->name ?? $user->n_name ?? '')));
         foreach (self::nameKeywords() as $kw) {
             if ($kw !== '' && $name !== '' && str_contains($name, $kw)) {

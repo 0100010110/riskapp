@@ -165,22 +165,26 @@ class RisksTable
                         ->action(function (Tmrisk $record, $livewire) {
                             $thisYear = (string) now()->format('Y');
 
+                            
                             $new = $record->replicate();
 
                             foreach (['i_entry', 'd_entry', 'i_update', 'd_update'] as $col) {
                                 unset($new->{$col});
                             }
 
-                            $new->c_risk_year   = $thisYear;
-                            $new->i_risk        = 'null';
-                            $new->c_risk_status = 0;
+                            $pk = $record->getKeyName();
+                            if ($pk) {
+                                unset($new->{$pk});
+                            }
 
-                            $new->setKeyName($record->getKeyName());
-                            $new->{$record->getKeyName()} = null;
+                            $new->c_risk_year   = $thisYear;
+                            $new->i_risk        = 'null'; // (biarkan sesuai behavior lama)
+                            $new->c_risk_status = 0;
 
                             try {
                                 $new->save();
                             } catch (QueryException $e) {
+                                // fallback jika i_risk 'null' memicu constraint tertentu
                                 $new->i_risk = 'TEMP';
                                 $new->save();
                             }

@@ -127,7 +127,7 @@ class RiskApprovalWorkflow
             ->where('f_active', true)
             ->where(function (Builder $b) {
                 $b->whereRaw("LOWER(COALESCE(c_role,'')) LIKE ?", ['%superadmin%'])
-                  ->orWhereRaw("LOWER(COALESCE(n_role,'')) LIKE ?", ['%superadmin%']);
+                    ->orWhereRaw("LOWER(COALESCE(n_role,'')) LIKE ?", ['%superadmin%']);
             })
             ->orderByRaw("
                 CASE
@@ -169,7 +169,7 @@ class RiskApprovalWorkflow
 
         $userId = (int) ($user?->getAuthIdentifier() ?? 0);
 
-        // ✅ Real superadmin sekarang ditentukan oleh policy
+        // ✅ real superadmin pakai policy (Racka / allowlist / dll)
         $isSuperAdminReal = false;
         try {
             $isSuperAdminReal = SuperadminPolicy::isSuperadmin($user);
@@ -253,7 +253,7 @@ class RiskApprovalWorkflow
         $effectiveRoleType = $isSuperAdminReal ? null : $roleType;
         $effectiveOrgPrefix = $orgPrefixReal;
 
-        // ✅ Simulasi hanya berlaku untuk real superadmin (policy)
+        // simulasi hanya untuk real superadmin
         if ($isSuperAdminReal) {
             $sim = static::getSimulateState();
             $simRole = strtolower(trim((string) ($sim['role_type'] ?? self::ROLE_TYPE_SUPERADMIN)));
@@ -519,10 +519,327 @@ class RiskApprovalWorkflow
         };
     }
 
-    // ... (SISA METHOD DI BAWAH INI TETAP SAMA PERSIS DENGAN KODE KAMU)
-    // NOTE: demi ringkas, kamu tinggal copy-paste sisa isi file dari versi kamu
-    // mulai dari actionableStatusesForCurrentUser() sampai canEditRiskOnApproval().
-    // Tidak ada perubahan yang diperlukan selain blok "superadmin real" yang sudah diganti policy di atas.
+    public static function actionableStatusesForCurrentUser(): array
+    {
+        $ctx = static::context();
 
-    // ⛔️ Kalau kamu butuh, bilang “lanjutkan sisa file RiskApprovalWorkflow” dan aku tempel full sampai bawah.
+        if ($ctx['is_superadmin']) {
+            return [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17];
+        }
+
+        return match ($ctx['role_type']) {
+            static::ROLE_TYPE_RISK_OFFICER => [0, 4, 9, 13],
+            static::ROLE_TYPE_KADIV        => [1, 6, 10, 14],
+            static::ROLE_TYPE_ADMIN_GRC    => [2, 7, 11, 15],
+            static::ROLE_TYPE_APPROVAL_GRC => [3, 5, 8, 12, 16],
+            default                        => [],
+        };
+    }
+
+    public static function nextStatusOnApproveForCurrentUser(int $currentStatus): ?int
+    {
+        $ctx = static::context();
+
+        if ($currentStatus === 5) {
+            return null;
+        }
+
+        if ($ctx['is_superadmin']) {
+            return match ($currentStatus) {
+                0 => 1,  1 => 2,  2 => 3,  3 => 4,
+                4 => 6,  6 => 7,  7 => 8,  8 => 9,
+                9 => 10, 10 => 11, 11 => 12, 12 => 13,
+                13 => 14, 14 => 15, 15 => 16, 16 => 17,
+                default => null,
+            };
+        }
+
+        return match ($ctx['role_type']) {
+            static::ROLE_TYPE_RISK_OFFICER => match ($currentStatus) {
+                0  => 1,
+                4  => 6,
+                9  => 10,
+                13 => 14,
+                default => null,
+            },
+
+            static::ROLE_TYPE_KADIV => match ($currentStatus) {
+                1  => 2,
+                6  => 7,
+                10 => 11,
+                14 => 15,
+                default => null,
+            },
+
+            static::ROLE_TYPE_ADMIN_GRC => match ($currentStatus) {
+                2  => 3,
+                7  => 8,
+                11 => 12,
+                15 => 16,
+                default => null,
+            },
+
+            static::ROLE_TYPE_APPROVAL_GRC => match ($currentStatus) {
+                3  => 4,
+                8  => 9,
+                12 => 13,
+                16 => 17,
+                default => null,
+            },
+
+            default => null,
+        };
+    }
+
+    public static function nextStatusOnRejectForCurrentUser(int $currentStatus): ?int
+    {
+        $ctx = static::context();
+
+        if ($ctx['is_superadmin']) {
+            return match ($currentStatus) {
+                0 => 0,
+                1 => 0,
+                2 => 1,
+                3 => 2,
+                4 => 3,
+
+                6 => 4,
+                7 => 6,
+                8 => 7,
+                9 => 8,
+
+                10 => 9,
+                11 => 10,
+                12 => 11,
+                13 => 12,
+
+                14 => 13,
+                15 => 14,
+                16 => 15,
+                17 => 16,
+
+                5 => 2,
+                default => null,
+            };
+        }
+
+        return match ($ctx['role_type']) {
+            static::ROLE_TYPE_RISK_OFFICER => match ($currentStatus) {
+                0  => 0,
+                4  => 4,
+                9  => 9,
+                13 => 13,
+                default => null,
+            },
+
+            static::ROLE_TYPE_KADIV => match ($currentStatus) {
+                1  => 0,
+                6  => 4,
+                10 => 9,
+                14 => 13,
+                default => null,
+            },
+
+            static::ROLE_TYPE_ADMIN_GRC => match ($currentStatus) {
+                2  => 1,
+                7  => 6,
+                11 => 10,
+                15 => 14,
+                default => null,
+            },
+
+            static::ROLE_TYPE_APPROVAL_GRC => match ($currentStatus) {
+                3  => 2,
+                8  => 7,
+                12 => 11,
+                16 => 15,
+                5  => 2,
+                default => null,
+            },
+
+            default => null,
+        };
+    }
+
+    public static function canApproveStatusForCurrentUser(int $status): bool
+    {
+        if ($status === 5) {
+            return static::canApproveDeleteRequestForCurrentUser($status);
+        }
+        return static::nextStatusOnApproveForCurrentUser($status) !== null;
+    }
+
+    public static function canRejectStatusForCurrentUser(int $status): bool
+    {
+        return static::nextStatusOnRejectForCurrentUser($status) !== null;
+    }
+
+    public static function canRequestDeleteForCurrentUser(int $status): bool
+    {
+        $ctx = static::context();
+
+        if ($ctx['is_superadmin']) {
+            return $status === 2;
+        }
+
+        return ($ctx['role_type'] === static::ROLE_TYPE_ADMIN_GRC) && ($status === 2);
+    }
+
+    public static function canApproveDeleteRequestForCurrentUser(int $status): bool
+    {
+        $ctx = static::context();
+
+        if ($status !== 5) {
+            return false;
+        }
+
+        if ($ctx['is_superadmin']) {
+            return true;
+        }
+
+        return $ctx['role_type'] === static::ROLE_TYPE_APPROVAL_GRC;
+    }
+
+    public static function isReadyForStage2ByOfficer(int $riskId): bool
+    {
+        $riskId = (int) $riskId;
+        if ($riskId <= 0) return false;
+
+        $ri = \App\Models\Tmriskinherent::query()
+            ->select(['i_id_riskinherent', 'i_id_risk'])
+            ->where('i_id_risk', $riskId)
+            ->first();
+
+        if (! $ri) return false;
+
+        return \App\Models\Tmriskmitigation::query()
+            ->where('i_id_riskinherent', (int) $ri->i_id_riskinherent)
+            ->exists();
+    }
+
+    public static function isReadyForStage3ByOfficer(int $riskId): bool
+    {
+        $riskId = (int) $riskId;
+        if ($riskId <= 0) return false;
+
+        $ri = \App\Models\Tmriskinherent::query()
+            ->select(['i_id_riskinherent', 'i_id_risk'])
+            ->where('i_id_risk', $riskId)
+            ->first();
+
+        if (! $ri) return false;
+
+        return \App\Models\Tmriskrealization::query()
+            ->where('i_id_riskinherent', (int) $ri->i_id_riskinherent)
+            ->exists();
+    }
+
+    public static function canApproveRiskForCurrentUser(\App\Models\Tmrisk $risk): bool
+    {
+        $status = (int) ($risk->c_risk_status ?? 0);
+
+        if (! static::canApproveStatusForCurrentUser($status)) {
+            return false;
+        }
+
+        $ctx = static::context();
+
+        if (($ctx['role_type'] ?? '') === static::ROLE_TYPE_RISK_OFFICER || ($ctx['is_superadmin'] ?? false)) {
+            $riskId = (int) ($risk->i_id_risk ?? 0);
+
+            if ($status === 4) {
+                return static::isReadyForStage2ByOfficer($riskId);
+            }
+
+            if ($status === 9) {
+                return static::isReadyForStage3ByOfficer($riskId);
+            }
+        }
+
+        return true;
+    }
+
+    private static function roleLooksLikeRsaEntry(?string $cRole, ?string $nRole): bool
+    {
+        $text = strtolower(trim((string) ($cRole . ' ' . $nRole)));
+        return str_contains($text, 'rsa entry')
+            || str_contains($text, 'risk self assessment entry')
+            || (str_contains($text, 'rsa') && str_contains($text, 'entry'));
+    }
+
+    private static function roleLooksLikeRiskOfficer(?string $cRole, ?string $nRole): bool
+    {
+        $text = strtolower(trim((string) ($cRole . ' ' . $nRole)));
+        return str_contains($text, 'risk officer')
+            || str_contains($text, 'riskofficer')
+            || (str_contains($text, 'officer') && str_contains($text, 'risk'));
+    }
+
+    private static function roleLooksLikeKadiv(?string $cRole, ?string $nRole): bool
+    {
+        $text = strtolower(trim((string) ($cRole . ' ' . $nRole)));
+
+        return str_contains($text, 'kadiv')
+            || str_contains($text, 'kepala divisi')
+            || str_contains($text, 'kepala div')
+            || str_contains($text, 'division head')
+            || str_contains($text, 'head of division');
+    }
+
+    private static function roleLooksLikeAdminGrc(?string $cRole, ?string $nRole): bool
+    {
+        $text = strtolower(trim((string) ($cRole . ' ' . $nRole)));
+
+        return str_contains($text, 'admin grc')
+            || str_contains($text, 'grc admin')
+            || (str_contains($text, 'admin') && str_contains($text, 'grc'));
+    }
+
+    private static function roleLooksLikeApprovalGrc(?string $cRole, ?string $nRole): bool
+    {
+        $text = strtolower(trim((string) ($cRole . ' ' . $nRole)));
+
+        return str_contains($text, 'approval grc')
+            || str_contains($text, 'approver grc')
+            || str_contains($text, 'grc approval')
+            || (str_contains($text, 'approval') && str_contains($text, 'grc'));
+    }
+
+   
+    public static function canEditRiskOnApproval(\App\Models\Tmrisk $risk): bool
+    {
+        $from = '';
+        try {
+            $from = strtolower(trim((string) request()->query('from', '')));
+        } catch (\Throwable) {
+            $from = '';
+        }
+
+        if ($from !== 'approval') {
+            return false;
+        }
+
+        if (! RiskApprovalResource::canViewAny()) {
+            return false;
+        }
+
+        try {
+            $perm = app(RolePermissionService::class);
+            if (! $perm->can(RiskResource::getMenuIdentifiers(), PermissionBitmask::UPDATE)) {
+                return false;
+            }
+        } catch (\Throwable) {
+            return false;
+        }
+
+        $riskId = (int) ($risk->getKey() ?? 0);
+        if ($riskId <= 0) {
+            return false;
+        }
+
+        $q = Tmrisk::query()->whereKey($riskId);
+        $q = static::applyApprovalListScope($q);
+
+        return $q->exists();
+    }
 }
