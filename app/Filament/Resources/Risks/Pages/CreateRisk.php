@@ -30,4 +30,9 @@ class CreateRisk extends CreateRecord
             ->skippable(false)
             ->contained(false);
     }
+
+    protected function getRedirectUrl(): string
+    {
+        return RiskResource::getUrl('index');
+    }
 }

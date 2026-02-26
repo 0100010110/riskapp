@@ -16,10 +16,6 @@ use Illuminate\Database\Eloquent\Builder;
 
 class RiskForm
 {
-    /**
-     * Setelah status >= 4 (Approved Tahap 1 RSA),
-     * bagian atas jadi readonly, bagian KRI+Exposure baru boleh diedit.
-     */
     private const STATUS_TAHAP1_APPROVED = 4;
 
     private static function isViewMode(): bool
@@ -29,6 +25,79 @@ class RiskForm
         } catch (\Throwable) {
             return false;
         }
+    }
+
+    private static function isViewPage(): bool
+    {
+        if (self::isViewMode()) {
+            return true;
+        }
+
+        try {
+            $route = request()->route();
+            if (! $route) {
+                return false;
+            }
+
+            $name = '';
+            try {
+                $name = (string) $route->getName();
+            } catch (\Throwable) {
+                $name = '';
+            }
+
+            $uri = '';
+            try {
+                $uri = (string) $route->uri();
+            } catch (\Throwable) {
+                $uri = '';
+            }
+
+            return (
+                ($name !== '' && str_ends_with($name, '.view'))
+                || ($uri === 'risks/{record}')
+            );
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    private static function hasMeaningfulValue(mixed $value): bool
+    {
+        if ($value === null) {
+            return false;
+        }
+
+        if (is_int($value) || is_float($value)) {
+            return true;
+        }
+
+        $v = trim((string) $value);
+        if ($v === '' || strtolower($v) === 'null') {
+            return false;
+        }
+
+        return true;
+    }
+
+    /** @param array<int,string> $attributes */
+    private static function recordHasAnyValue(?Tmrisk $record, array $attributes): bool
+    {
+        if (! $record) {
+            return false;
+        }
+
+        foreach ($attributes as $attr) {
+            try {
+                if (self::hasMeaningfulValue($record->getAttribute($attr))) {
+                    return true;
+                }
+            } catch (\Throwable) {
+                // ignore
+            }
+        }
+
+        return false;
     }
 
     private static function status(?Tmrisk $record): int
@@ -55,7 +124,29 @@ class RiskForm
     }
 
     /**
-     * Wizard Create: hanya sampai Primary Risk (RSA entry tahap 1)
+     * @return array<string,string>
+     */
+    private static function yearOptions(?Tmrisk $record = null): array
+    {
+        $now = (int) now()->format('Y');
+        $years = range($now, $now + 10);
+
+        $recordYear = (int) ($record?->c_risk_year ?? 0);
+        if ($recordYear > 0 && ! in_array($recordYear, $years, true)) {
+            $years[] = $recordYear;
+        }
+
+        sort($years);
+
+        $out = [];
+        foreach ($years as $y) {
+            $out[(string) $y] = (string) $y;
+        }
+
+        return $out;
+    }
+
+    /**
      * @return array<int, Step>
      */
     public static function wizardStepsForCreate(): array
@@ -77,10 +168,6 @@ class RiskForm
     }
 
     /**
-     * Wizard Edit:
-     * - sebelum tahap 1 approved: hanya step atas + primary
-     * - setelah tahap 1 approved: step atas readonly + muncul KRI/Exposure editable
-     *
      * @return array<int, Step>
      */
     public static function wizardStepsForEdit(?Tmrisk $record = null): array
@@ -134,22 +221,36 @@ class RiskForm
                     ->disabled(fn (?Tmrisk $record) => self::lockTopSteps($record))
                     ->helperText('Dipilih dari level 5 (Dasar Risiko).'),
 
-                TextInput::make('c_risk_year')
+                Select::make('c_risk_year')
                     ->label('Tahun Risiko')
+                    ->options(fn (?Tmrisk $record = null) => self::yearOptions($record))
+                    ->default(fn () => (string) now()->format('Y'))
+                    ->native(false)
+                    ->searchable(false)
                     ->required()
-                    ->maxLength(4)
-                    ->minLength(4)
-                    ->rule('regex:/^[0-9]{4}$/')
-                    ->placeholder('2026')
                     ->disabled(fn (?Tmrisk $record) => self::lockTopSteps($record)),
 
                 TextInput::make('i_risk')
                     ->label('Nomor Risiko')
-                    ->required()
                     ->maxLength(50)
                     ->disabled()
                     ->dehydrated(true)
-                    ->default(fn (?Tmrisk $record = null) => filled($record?->i_risk) ? (string) $record->i_risk : 'null')
+                    ->default('')
+                    ->afterStateHydrated(function (Set $set, $state): void {
+                        $v = trim((string) $state);
+
+                        if ($v === '' || strtolower($v) === 'null') {
+                            $set('i_risk', '');
+                        }
+                    })
+                    ->formatStateUsing(function ($state): string {
+                        $v = trim((string) $state);
+                        return ($v === '' || strtolower($v) === 'null') ? '' : $v;
+                    })
+                    ->dehydrateStateUsing(function ($state): string {
+                        $v = trim((string) $state);
+                        return ($v === '' || strtolower($v) === 'null') ? '' : $v;
+                    })
                     ->helperText('Nomor Risiko akan digenerate otomatis saat status final tahap tertentu (observer).'),
 
                 Select::make('c_risk_status')
@@ -257,6 +358,20 @@ class RiskForm
     {
         return Section::make('KRI (Key Risk Indicator) & Threshold')
             ->columnSpanFull()
+            ->visible(function (?Tmrisk $record): bool {
+                if (self::isViewPage()) {
+                    return self::recordHasAnyValue($record, [
+                        'e_kri',
+                        'c_kri_unit',
+                        'c_kri_operator',
+                        'v_threshold_safe',
+                        'v_threshold_caution',
+                        'v_threshold_danger',
+                    ]);
+                }
+
+                return true;
+            })
             ->columns(2)
             ->schema([
                 Textarea::make('e_kri')
@@ -310,6 +425,17 @@ class RiskForm
     {
         return Section::make('Periode Paparan, & Efektivitas Kontrol')
             ->columnSpanFull()
+            ->visible(function (?Tmrisk $record): bool {
+                if (self::isViewPage()) {
+                    return self::recordHasAnyValue($record, [
+                        'd_exposure_period',
+                        'c_control_effectiveness',
+                        'e_exist_ctrl',
+                    ]);
+                }
+
+                return true;
+            })
             ->columns(2)
             ->schema([
                 TextInput::make('d_exposure_period')
@@ -336,10 +462,7 @@ class RiskForm
             ]);
     }
 
-    /**
-     * Schema default (untuk Filament Resource::form()).
-     * Ini tetap ada supaya RiskResource::form() tidak error.
-     */
+    
     public static function configure(Schema $schema): Schema
     {
         return $schema

@@ -29,6 +29,12 @@ class ViewRisk extends ViewRecord
         $from = strtolower(trim((string) request()->query('from', '')));
         $status = (int) ($record->c_risk_status ?? 0);
 
+        $ctx = RiskApprovalWorkflow::context();
+        $roleType = (string) ($ctx['role_type'] ?? '');
+        $isSuper  = (bool) ($ctx['is_superadmin'] ?? false);
+
+        $canEditOnApproval = $isSuper || $roleType === RiskApprovalWorkflow::ROLE_TYPE_ADMIN_GRC;
+
         $canApprove = RiskApprovalWorkflow::canApproveStatusForCurrentUser($status);
         $canReject  = $canApprove && RiskApprovalWorkflow::canRejectStatusForCurrentUser($status);
 
@@ -47,7 +53,16 @@ class ViewRisk extends ViewRecord
             Actions\Action::make('edit')
                 ->label('Edit')
                 ->icon('heroicon-o-pencil-square')
-                ->visible(fn () => RiskResource::canEdit($record))
+                ->visible(fn () =>
+                    RiskResource::canEdit($record)
+                    && (
+                        $from !== 'approval'
+                        || (
+                            $canEditOnApproval
+                            && RiskApprovalWorkflow::canEditRiskOnApproval($record)
+                        )
+                    )
+                )
                 ->url(function () use ($record, $from) {
                     $url = RiskResource::getUrl('edit', ['record' => $record]);
 
