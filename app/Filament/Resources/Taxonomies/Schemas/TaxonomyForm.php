@@ -114,23 +114,11 @@ class TaxonomyForm
 
         $parentLevel = $level - 1;
 
-        $tbl = (new Tmtaxonomy())->getTable();
-
+       
         $parents = Tmtaxonomy::query()
             ->select(['i_id_taxonomy', 'c_taxonomy', 'c_taxonomy_level', 'n_taxonomy'])
             ->where('c_taxonomy_level', $parentLevel)
             ->when($ignoreId, fn ($q) => $q->where('i_id_taxonomy', '!=', (int) $ignoreId))
-            ->where(function ($q) use ($tbl, $allowParentId) {
-                $q->whereNotExists(function ($sq) use ($tbl) {
-                    $sq->selectRaw('1')
-                        ->from($tbl . ' as ch')
-                        ->whereColumn('ch.i_id_taxonomyparent', $tbl . '.i_id_taxonomy');
-                });
-
-                if ($allowParentId) {
-                    $q->orWhere($tbl . '.i_id_taxonomy', (int) $allowParentId);
-                }
-            })
             ->orderBy('c_taxonomy')
             ->get();
 
@@ -202,7 +190,7 @@ class TaxonomyForm
         }
 
         $parentPath = self::stripPrefixIfAny((string) $parent->c_taxonomy);
-        $path = $parentPath . $segment; 
+        $path = $parentPath . $segment;
         $set('c_taxonomy', $path);
         $set('_taxonomy_code_display', self::displayCode($level, $path));
     }
@@ -256,7 +244,7 @@ class TaxonomyForm
                             $lvl = (int) ($get('c_taxonomy_level') ?: 0);
                             if ($lvl <= 0) return 'Pilih level terlebih dahulu.';
                             if ($lvl <= 1) return 'Level 1 tidak memiliki parent.';
-                            return 'Parent difilter: hanya level ' . ($lvl - 1) . ' yang belum punya child.';
+                            return 'Pilih parent dari level ' . ($lvl - 1) . '.';
                         })
                         ->columnSpan(2),
 
@@ -312,14 +300,13 @@ class TaxonomyForm
                         ->options(fn () => self::scaleOptions())
                         ->disabled(fn (Get $get) => (int) ($get('c_taxonomy_level') ?: 0) !== 5)
                         ->required(fn (Get $get) => (int) ($get('c_taxonomy_level') ?: 0) === 5)
-                        ->dehydrated(false) 
+                        ->dehydrated(false)
                         ->helperText(fn (Get $get): string =>
                             ((int) ($get('c_taxonomy_level') ?: 0) !== 5)
                                 ? 'Skala hanya dapat diisi untuk taksonomi level 5.'
                                 : 'Pilih skala Dampak & Kemungkinan sesuai kebutuhan.'
                         )
                         ->columnSpan(2),
-
 
                     TextInput::make('n_taxonomy')
                         ->label('Nama')
