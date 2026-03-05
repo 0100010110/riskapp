@@ -27,7 +27,7 @@ class CreateRisk extends CreateRecord
             ->cancelAction($this->getCancelFormAction())
             ->submitAction($this->getSubmitFormAction())
             ->alpineSubmitHandler("\$wire.{$this->getSubmitFormLivewireMethodName()}()")
-            ->skippable(false)
+            ->skippable(true)
             ->contained(false);
     }
 

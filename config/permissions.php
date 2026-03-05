@@ -1,10 +1,6 @@
 <?php
 
 return [
-    /**
-     * Comma-separated user IDs dari .env SUPERUSER_IDS
-     * contoh: "2875,1001,1002"
-     */
     'superuser_ids' => array_values(array_unique(array_filter(
         array_map(
             fn ($v) => (int) $v,

@@ -178,7 +178,7 @@ class RisksTable
                             }
 
                             $new->c_risk_year   = $thisYear;
-                            $new->i_risk        = 'null'; // (biarkan sesuai behavior lama)
+                            $new->i_risk        = 'null'; 
                             $new->c_risk_status = 0;
 
                             try {

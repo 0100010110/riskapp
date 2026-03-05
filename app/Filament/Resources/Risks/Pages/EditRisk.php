@@ -33,7 +33,6 @@ class EditRisk extends EditRecord
         /** @var \App\Models\Tmrisk $record */
         $record = $this->getRecord();
 
-        // mode view (read-only)
         if (request()->boolean('view')) {
             abort_unless(static::getResource()::canView($record), 403);
             return;
@@ -71,17 +70,27 @@ class EditRisk extends EditRecord
 
     public function getWizardComponent(): Component
     {
-        $submitAction = request()->boolean('view')
+        $isView = request()->boolean('view');
+
+        $submitAction = $isView
             ? null
             : $this->getSubmitFormAction();
 
-        return Wizard::make($this->getSteps())
+        $wizard = Wizard::make($this->getSteps())
             ->startOnStep($this->getStartStep())
             ->cancelAction($this->getCancelFormAction())
             ->submitAction($submitAction)
             ->alpineSubmitHandler("\$wire.{$this->getSubmitFormLivewireMethodName()}()")
-            ->skippable(false)
+            ->skippable(true)
             ->contained(false);
+
+        if (! $isView) {
+            $wizard->extraAttributes([
+                'data-intermediate-save' => '1',
+            ]);
+        }
+
+        return $wizard;
     }
 
     protected function getSaveFormAction(): Action
@@ -166,5 +175,10 @@ class EditRisk extends EditRecord
         $data['d_update'] = now();
 
         return $data;
+    }
+
+    protected function getRedirectUrl(): string
+    {
+        return RiskResource::getUrl('index');
     }
 }
