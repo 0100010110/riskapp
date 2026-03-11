@@ -13,6 +13,10 @@ class LoginController extends Controller
 {
     public function login()
     {
+        if (Auth::check()) {
+            return redirect()->route('home'); // /home
+        }
+
         return Socialite::driver('keycloak')->redirect();
     }
 
@@ -65,7 +69,8 @@ class LoginController extends Controller
             $request->session()->regenerate();
         }
 
-        return redirect()->intended(url('/'));
+        $request->session()->forget('url.intended');
+        return redirect()->route('home'); // /home
     }
 
     public function logout(Request $request, ?string $redirectUri = null)
