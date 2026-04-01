@@ -4,6 +4,7 @@ namespace App\Filament\Resources\Risks\Tables;
 
 use App\Filament\Resources\Risks\RiskResource;
 use App\Models\Tmrisk;
+use App\Support\RiskApprovalWorkflow;
 use App\Support\TaxonomyFormatter;
 use Filament\Actions;
 use Filament\Notifications\Notification;
@@ -15,11 +16,59 @@ use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 
 class RisksTable
 {
     public static function configure(Table $table): Table
     {
+        $ctx = RiskApprovalWorkflow::context();
+        $userId = (int) ($ctx['user_id'] ?? 0);
+        $orgPrefix = trim((string) ($ctx['org_prefix'] ?? ''));
+        $roleType = (string) ($ctx['role_type'] ?? '');
+        $isSuper = (bool) ($ctx['is_superadmin'] ?? false);
+
+        $empId = RiskApprovalWorkflow::currentEmpId();
+        $actionableStatuses = RiskApprovalWorkflow::actionableStatusesForCurrentUser();
+        $riskTable = (new Tmrisk())->getTable();
+        $approvalTable = 'tmriskapprove';
+
+        $applyPendingApprovalFilter = function (Builder $query) use (
+            $actionableStatuses,
+            $approvalTable,
+            $empId,
+            $isSuper,
+            $riskTable,
+            $roleType
+        ): Builder {
+            if ($actionableStatuses === []) {
+                return $query->whereRaw('1 = 0');
+            }
+
+            $query->whereIn($riskTable . '.c_risk_status', $actionableStatuses);
+
+            if ($isSuper || $empId <= 0 || $roleType === RiskApprovalWorkflow::ROLE_TYPE_RSA_ENTRY) {
+                return $query;
+            }
+
+            return $query->where(function (Builder $pending) use ($approvalTable, $empId, $riskTable) {
+                $pending->whereNotExists(function ($sub) use ($approvalTable, $empId, $riskTable) {
+                    $sub->select(DB::raw(1))
+                        ->from($approvalTable . ' as ra')
+                        ->whereColumn('ra.i_id_risk', $riskTable . '.i_id_risk')
+                        ->where('ra.i_emp', $empId);
+                })->orWhereExists(function ($sub) use ($approvalTable, $empId, $riskTable) {
+                    $sub->select(DB::raw(1))
+                        ->from($approvalTable . ' as ra')
+                        ->whereColumn('ra.i_id_risk', $riskTable . '.i_id_risk')
+                        ->where('ra.i_emp', $empId)
+                        ->whereRaw(
+                            "COALESCE(ra.d_entry, CURRENT_TIMESTAMP) < COALESCE({$riskTable}.d_update, {$riskTable}.d_entry)"
+                        );
+                });
+            });
+        };
+
         return $table
             ->toolbarActions([
                 Actions\Action::make('print_risk_register')
@@ -56,6 +105,25 @@ class RisksTable
                                     );
                             });
                     }),
+                Filter::make('my_drafts')
+                    ->label('Draft saya')
+                    ->query(fn (Builder $query): Builder => $query
+                        ->where($riskTable . '.i_entry', $userId)
+                        ->where($riskTable . '.c_risk_status', 0)),
+                Filter::make('my_division_risks')
+                    ->label('Risk divisi saya')
+                    ->query(fn (Builder $query): Builder => $orgPrefix !== ''
+                        ? $query->where($riskTable . '.c_org_owner', $orgPrefix)
+                        : $query->whereRaw('1 = 0')),
+                Filter::make('my_pending_approvals')
+                    ->label('Pending approval saya')
+                    ->query(fn (Builder $query): Builder => $applyPendingApprovalFilter($query)),
+                Filter::make('current_year_risks')
+                    ->label('Risk tahun ini')
+                    ->query(fn (Builder $query): Builder => $query->where($riskTable . '.c_risk_year', (string) now()->year)),
+                Filter::make('primary_risks_only')
+                    ->label('Primary risk saja')
+                    ->query(fn (Builder $query): Builder => $query->where($riskTable . '.f_risk_primary', true)),
             ])
             ->groups([
                 Group::make('c_risk_year')
@@ -197,14 +265,14 @@ class RisksTable
                                 unset($new->{$pk});
                             }
 
-                            $new->c_risk_year = $thisYear;
-                            $new->i_risk = 'null';
-                            $new->c_risk_status = 0;
+                            $new->setAttribute('c_risk_year', $thisYear);
+                            $new->setAttribute('i_risk', null);
+                            $new->setAttribute('c_risk_status', 0);
 
                             try {
                                 $new->save();
                             } catch (QueryException) {
-                                $new->i_risk = 'TEMP';
+                                $new->setAttribute('i_risk', 'TEMP');
                                 $new->save();
                             }
 
