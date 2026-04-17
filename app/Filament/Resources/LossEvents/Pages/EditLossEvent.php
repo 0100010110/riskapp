@@ -3,12 +3,21 @@
 namespace App\Filament\Resources\LossEvents\Pages;
 
 use App\Filament\Resources\LossEvents\LossEventResource;
+use Filament\Actions;
 use Filament\Facades\Filament;
 use Filament\Resources\Pages\EditRecord;
 
 class EditLossEvent extends EditRecord
 {
     protected static string $resource = LossEventResource::class;
+
+    protected function getHeaderActions(): array
+    {
+        return [
+            Actions\DeleteAction::make()
+                ->visible(fn () => static::getResource()::canDelete($this->record)),
+        ];
+    }
 
     protected function mutateFormDataBeforeSave(array $data): array
     {

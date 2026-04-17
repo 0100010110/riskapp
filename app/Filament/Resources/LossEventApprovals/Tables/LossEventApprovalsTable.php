@@ -2,14 +2,18 @@
 
 namespace App\Filament\Resources\LossEventApprovals\Tables;
 
+use App\Filament\Resources\LossEventApprovals\LossEventApprovalResource;
 use App\Models\Tmlostevent;
 use App\Services\EmployeeCacheService;
 use App\Support\LossEventApprovalWorkflow;
 use App\Support\TaxonomyFormatter;
 use Carbon\Carbon;
+use Filament\Actions;
+use Filament\Notifications\Notification;
+use Filament\Support\Icons\Heroicon;
 use Filament\Tables;
-use Filament\Tables\Table;
 use Filament\Tables\Grouping\Group;
+use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 
 class LossEventApprovalsTable
@@ -40,7 +44,6 @@ class LossEventApprovalsTable
 
             ->recordUrl(null)
             ->recordAction(null)
-            ->recordActions([])
 
             ->groups([
                 Group::make('approval_group')
@@ -130,6 +133,83 @@ class LossEventApprovalsTable
                         }
                     })
                     ->html(),
+            ])
+            ->headerActions([])
+            ->emptyStateActions([])
+            ->recordActions([
+                Actions\ActionGroup::make([
+                    Actions\Action::make('approve')
+                        ->label(fn (Tmlostevent $record): string =>
+                            ((int) ($record->c_lostevent_status ?? 0) === Tmlostevent::STATUS_DELETE_REQUEST)
+                                ? 'Approve Delete'
+                                : 'Approve'
+                        )
+                        ->color('success')
+                        ->icon(Heroicon::OutlinedCheckCircle)
+                        ->visible(fn (Tmlostevent $record): bool =>
+                            LossEventApprovalResource::canApproveRecord($record)
+                        )
+                        ->requiresConfirmation()
+                        ->modalHeading(fn (Tmlostevent $record): string =>
+                            ((int) ($record->c_lostevent_status ?? 0) === Tmlostevent::STATUS_DELETE_REQUEST)
+                                ? 'Approve Delete Loss Event'
+                                : 'Approve Loss Event'
+                        )
+                        ->modalDescription(fn (Tmlostevent $record): string =>
+                            ((int) ($record->c_lostevent_status ?? 0) === Tmlostevent::STATUS_DELETE_REQUEST)
+                                ? 'Record akan dihapus permanen setelah approval ini. Lanjutkan?'
+                                : 'Status loss event akan diproses ke tahap approval berikutnya. Lanjutkan?'
+                        )
+                        ->action(function (Tmlostevent $record): void {
+                            try {
+                                LossEventApprovalWorkflow::approve($record);
+
+                                Notification::make()
+                                    ->success()
+                                    ->title('Approval berhasil diproses')
+                                    ->send();
+                            } catch (\Throwable $e) {
+                                Notification::make()
+                                    ->danger()
+                                    ->title('Approval gagal diproses')
+                                    ->body($e->getMessage())
+                                    ->send();
+                            }
+                        }),
+
+                    Actions\Action::make('delete')
+                        ->label('Delete')
+                        ->color('danger')
+                        ->icon(Heroicon::OutlinedTrash)
+                        ->visible(fn (Tmlostevent $record): bool =>
+                            LossEventApprovalResource::canDeleteRecord($record)
+                        )
+                        ->requiresConfirmation()
+                        ->modalHeading('Delete Loss Event')
+                        ->modalDescription('Aksi ini tidak langsung menghapus record. Sistem akan membuat pengajuan penghapusan sesuai flow approval. Lanjutkan?')
+                        ->action(function (Tmlostevent $record): void {
+                            try {
+                                LossEventApprovalWorkflow::requestDelete($record);
+
+                                Notification::make()
+                                    ->success()
+                                    ->title('Pengajuan hapus berhasil dibuat')
+                                    ->send();
+                            } catch (\Throwable $e) {
+                                Notification::make()
+                                    ->danger()
+                                    ->title('Pengajuan hapus gagal')
+                                    ->body($e->getMessage())
+                                    ->send();
+                            }
+                        }),
+                ])
+                    ->icon(Heroicon::OutlinedBars3)
+                    ->label('')
+                    ->tooltip('Actions')
+                    ->visible(fn (Tmlostevent $record): bool =>
+                        LossEventApprovalResource::hasAnyRowAction($record)
+                    ),
             ]);
     }
 
