@@ -11,48 +11,8 @@ use Laravel\Socialite\Two\InvalidStateException;
 
 class LoginController extends Controller
 {
-    protected function localBypassEnabled(): bool
+    public function login()
     {
-        return app()->isLocal()
-            && filter_var((string) env('LOCAL_BYPASS_LOGIN', false), FILTER_VALIDATE_BOOL);
-    }
-
-    protected function loginLocalSuperadmin(Request $request)
-    {
-        $email = trim((string) env('LOCAL_BYPASS_EMAIL', 'superadmin.local@example.test'));
-        $name  = trim((string) env('LOCAL_BYPASS_NAME', 'Racka Local Superadmin'));
-        $nik   = preg_replace('/\D+/', '', (string) env('LOCAL_BYPASS_NIK', '180144'));
-
-        $user = User::query()->firstOrNew([
-            'email' => $email,
-        ]);
-
-        $user->forceFill([
-            'keycloak_id' => $user->keycloak_id ?: 'local-bypass-superadmin',
-            'name'        => $name !== '' ? $name : 'Racka Local Superadmin',
-            'nik'         => $nik !== '' ? $nik : '180144',
-            'email'       => $email !== '' ? $email : 'superadmin.local@example.test',
-        ]);
-
-        $user->save();
-
-        Auth::login($user);
-        $request->session()->regenerate();
-        $request->session()->forget('url.intended');
-
-        return redirect()->route('home');
-    }
-
-    public function login(Request $request)
-    {
-        if ($this->localBypassEnabled()) {
-            if (Auth::check()) {
-                return redirect()->route('home');
-            }
-
-            return $this->loginLocalSuperadmin($request);
-        }
-
         if (Auth::check()) {
             return redirect()->route('home'); // /home
         }
@@ -62,16 +22,6 @@ class LoginController extends Controller
 
     public function redirect(Request $request)
     {
-        if ($this->localBypassEnabled()) {
-            if (! Auth::check()) {
-                return $this->loginLocalSuperadmin($request);
-            }
-
-            $request->session()->forget('url.intended');
-
-            return redirect()->route('home');
-        }
-
         if (! Auth::check()) {
             try {
                 $keycloak = Socialite::driver('keycloak')->user();
@@ -120,22 +70,12 @@ class LoginController extends Controller
         }
 
         $request->session()->forget('url.intended');
-
         return redirect()->route('home'); // /home
     }
 
     public function logout(Request $request, ?string $redirectUri = null)
     {
         $redirectUri ??= route('home');
-
-        if ($this->localBypassEnabled()) {
-            Auth::logout();
-
-            $request->session()->invalidate();
-            $request->session()->regenerateToken();
-
-            return redirect($redirectUri);
-        }
 
         $role = Auth::user()?->role;
 

@@ -7,6 +7,7 @@ use App\Filament\Resources\LossEvents\Pages;
 use App\Filament\Resources\LossEvents\Schemas\LossEventForm;
 use App\Filament\Resources\LossEvents\Tables\LossEventsTable;
 use App\Models\Tmlostevent;
+use App\Support\LossEventApprovalWorkflow;
 use BackedEnum;
 use Filament\Schemas\Schema;
 use Filament\Tables\Table;
@@ -30,6 +31,19 @@ class LossEventResource extends BaseResource
     public static function getEloquentQuery(): Builder
     {
         return parent::getEloquentQuery()->with(['taxonomy']);
+    }
+
+    public static function canEdit(Model $record): bool
+    {
+        if (! parent::canEdit($record)) {
+            return false;
+        }
+
+        if (! $record instanceof Tmlostevent) {
+            return false;
+        }
+
+        return LossEventApprovalWorkflow::canEditLossEventDataForCurrentUser($record);
     }
 
     public static function canDelete(Model $record): bool

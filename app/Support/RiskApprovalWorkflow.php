@@ -806,40 +806,74 @@ class RiskApprovalWorkflow
     }
 
    
-    public static function canEditRiskOnApproval(\App\Models\Tmrisk $risk): bool
-    {
-        $from = '';
-        try {
-            $from = strtolower(trim((string) request()->query('from', '')));
-        } catch (\Throwable) {
-            $from = '';
-        }
+    public static function editableStatusesForCurrentUser(): array
+{
+    $ctx = static::context();
 
-        if ($from !== 'approval') {
-            return false;
-        }
-
-        if (! RiskApprovalResource::canViewAny()) {
-            return false;
-        }
-
-        try {
-            $perm = app(RolePermissionService::class);
-            if (! $perm->can(RiskResource::getMenuIdentifiers(), PermissionBitmask::UPDATE)) {
-                return false;
-            }
-        } catch (\Throwable) {
-            return false;
-        }
-
-        $riskId = (int) ($risk->getKey() ?? 0);
-        if ($riskId <= 0) {
-            return false;
-        }
-
-        $q = Tmrisk::query()->whereKey($riskId);
-        $q = static::applyApprovalListScope($q);
-
-        return $q->exists();
+    if ($ctx['is_superadmin']) {
+        return [0, 1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17];
     }
+
+    return match ($ctx['role_type']) {
+        static::ROLE_TYPE_RSA_ENTRY    => [0],
+        static::ROLE_TYPE_RISK_OFFICER => [0, 4, 9, 13],
+        static::ROLE_TYPE_KADIV        => [1, 6, 10, 14],
+        static::ROLE_TYPE_ADMIN_GRC    => [2, 7, 11, 15],
+        static::ROLE_TYPE_APPROVAL_GRC => [3, 8, 12, 16],
+        default                        => [],
+    };
+}
+
+public static function canEditRiskDataForCurrentUser(\App\Models\Tmrisk $risk): bool
+{
+    $ctx = static::context();
+
+    if (! $ctx['is_superadmin']) {
+        $editable = static::editableStatusesForCurrentUser();
+        $status = (int) ($risk->c_risk_status ?? 0);
+
+        if (! in_array($status, $editable, true)) {
+            return false;
+        }
+    }
+
+    $riskId = (int) ($risk->getKey() ?? 0);
+    if ($riskId <= 0) {
+        return false;
+    }
+
+    $q = Tmrisk::query()->whereKey($riskId);
+    $q = static::applyRiskRegisterScope($q);
+
+    return $q->exists();
+}
+
+public static function canEditRiskOnApproval(\App\Models\Tmrisk $risk): bool
+{
+    $from = '';
+    try {
+        $from = strtolower(trim((string) request()->query('from', '')));
+    } catch (\Throwable) {
+        $from = '';
+    }
+
+    if ($from !== 'approval') {
+        return false;
+    }
+
+    if (! RiskApprovalResource::canViewAny()) {
+        return false;
+    }
+
+    try {
+        $perm = app(RolePermissionService::class);
+        if (! $perm->can(RiskResource::getMenuIdentifiers(), PermissionBitmask::UPDATE)) {
+            return false;
+        }
+    } catch (\Throwable) {
+        return false;
+    }
+
+    return static::canEditRiskDataForCurrentUser($risk);
+}
 }

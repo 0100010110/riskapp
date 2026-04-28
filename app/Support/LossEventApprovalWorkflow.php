@@ -3,7 +3,10 @@
 namespace App\Support;
 
 use App\Models\Tmlostevent;
+use App\Models\Trrole;
+use App\Models\Truserrole;
 use App\Services\EmployeeCacheService;
+use Filament\Facades\Filament;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
 
@@ -16,18 +19,21 @@ class LossEventApprovalWorkflow
     public const STATUS_APPROVED_KADIV   = 15;
     public const STATUS_PENGAJUAN_ADMIN  = 16;
     public const STATUS_APPROVED_FINAL   = 17;
+
     public const SESSION_SIM_KEY = 'loss_event_approval.simulate';
 
     /** @var array<string,mixed>|null */
     protected static ?array $cachedContext = null;
 
+    protected static ?bool $hasSuperadminLikeRoleCache = null;
+
     public static function flushContext(): void
     {
         static::$cachedContext = null;
+        static::$hasSuperadminLikeRoleCache = null;
     }
 
     /**
-     * Simulate state:
      * @return array{role_type?:string, org_prefix?:string}
      */
     public static function getSimulateState(): array
@@ -65,11 +71,9 @@ class LossEventApprovalWorkflow
             $orgPrefix = 'GR';
         }
 
-        if ($roleType === RiskApprovalWorkflow::ROLE_TYPE_SUPERADMIN) {
-            static::clearSimulateState();
-            return;
-        }
-
+        // penting:
+        // superadmin tetap disimpan sebagai state simulasi,
+        // supaya UI/action membaca masking superadmin secara eksplisit
         try {
             session()->put(self::SESSION_SIM_KEY, [
                 'role_type'  => $roleType,
@@ -91,7 +95,89 @@ class LossEventApprovalWorkflow
         static::flushContext();
     }
 
-   
+    protected static function currentUser()
+    {
+        $user = null;
+
+        try {
+            $user = Filament::auth()->user();
+        } catch (\Throwable) {
+            $user = null;
+        }
+
+        return $user ?? auth()->user();
+    }
+
+    /**
+     * @return array<int>
+     */
+    protected static function currentUserRoleIds(): array
+    {
+        $user = static::currentUser();
+        $uid  = (int) ($user?->getAuthIdentifier() ?? 0);
+
+        if ($uid <= 0) {
+            return [];
+        }
+
+        $roleIds = Truserrole::query()
+            ->where('i_id_user', $uid)
+            ->pluck('i_id_role')
+            ->map(fn ($v) => (int) $v)
+            ->filter(fn ($v) => $v > 0)
+            ->unique()
+            ->values()
+            ->all();
+
+        if (! empty($roleIds)) {
+            return $roleIds;
+        }
+
+        $nikRaw = trim((string) ($user?->nik ?? ''));
+        if ($nikRaw !== '' && ctype_digit($nikRaw)) {
+            $nik = (int) $nikRaw;
+
+            if ($nik > 0 && $nik !== $uid) {
+                $roleIds = Truserrole::query()
+                    ->where('i_id_user', $nik)
+                    ->pluck('i_id_role')
+                    ->map(fn ($v) => (int) $v)
+                    ->filter(fn ($v) => $v > 0)
+                    ->unique()
+                    ->values()
+                    ->all();
+            }
+        }
+
+        return $roleIds;
+    }
+
+    protected static function hasSuperadminLikeRole(): bool
+    {
+        if (static::$hasSuperadminLikeRoleCache !== null) {
+            return static::$hasSuperadminLikeRoleCache;
+        }
+
+        $roleIds = static::currentUserRoleIds();
+
+        if (empty($roleIds)) {
+            return static::$hasSuperadminLikeRoleCache = false;
+        }
+
+        $exists = Trrole::query()
+            ->whereIn('i_id_role', $roleIds)
+            ->where('f_active', true)
+            ->where(function (Builder $q) {
+                $q->whereRaw("LOWER(COALESCE(c_role,'')) LIKE ?", ['%superadmin%'])
+                    ->orWhereRaw("LOWER(COALESCE(n_role,'')) LIKE ?", ['%superadmin%'])
+                    ->orWhereRaw("LOWER(COALESCE(c_role,'')) LIKE ?", ['%super admin%'])
+                    ->orWhereRaw("LOWER(COALESCE(n_role,'')) LIKE ?", ['%super admin%']);
+            })
+            ->exists();
+
+        return static::$hasSuperadminLikeRoleCache = $exists;
+    }
+
     public static function context(): array
     {
         if (static::$cachedContext !== null) {
@@ -99,43 +185,59 @@ class LossEventApprovalWorkflow
         }
 
         $base = RiskApprovalWorkflow::context();
-
-        if (! RiskApprovalWorkflow::isRealSuperadmin()) {
-            return static::$cachedContext = $base;
-        }
-
-        $sim = static::getSimulateState();
+        $sim  = static::getSimulateState();
         $simRole = strtolower(trim((string) ($sim['role_type'] ?? '')));
+        $simDiv  = static::normalizeOrgPrefix((string) ($sim['org_prefix'] ?? ''));
 
-        if ($simRole === '') {
+        // real superadmin
+        if (RiskApprovalWorkflow::isRealSuperadmin()) {
+            if ($simRole === '' || $simRole === RiskApprovalWorkflow::ROLE_TYPE_SUPERADMIN) {
+                $base['is_superadmin'] = true;
+                $base['impersonating'] = false;
+                $base['role_type']     = null;
+
+                return static::$cachedContext = $base;
+            }
+
+            $allowed = [
+                RiskApprovalWorkflow::ROLE_TYPE_RSA_ENTRY,
+                RiskApprovalWorkflow::ROLE_TYPE_RISK_OFFICER,
+                RiskApprovalWorkflow::ROLE_TYPE_KADIV,
+                RiskApprovalWorkflow::ROLE_TYPE_ADMIN_GRC,
+                RiskApprovalWorkflow::ROLE_TYPE_APPROVAL_GRC,
+            ];
+
+            if (! in_array($simRole, $allowed, true)) {
+                $base['is_superadmin'] = true;
+                $base['impersonating'] = false;
+                $base['role_type']     = null;
+
+                return static::$cachedContext = $base;
+            }
+
+            if (in_array($simRole, [
+                RiskApprovalWorkflow::ROLE_TYPE_ADMIN_GRC,
+                RiskApprovalWorkflow::ROLE_TYPE_APPROVAL_GRC,
+            ], true)) {
+                $simDiv = 'GR';
+            }
+
+            $base['is_superadmin'] = false;
+            $base['impersonating'] = true;
+            $base['role_type']     = $simRole;
+            $base['org_prefix']    = $simDiv !== '' ? $simDiv : (string) ($base['org_prefix'] ?? '');
+
             return static::$cachedContext = $base;
         }
 
-        $allowed = [
-            RiskApprovalWorkflow::ROLE_TYPE_RSA_ENTRY,
-            RiskApprovalWorkflow::ROLE_TYPE_RISK_OFFICER,
-            RiskApprovalWorkflow::ROLE_TYPE_KADIV,
-            RiskApprovalWorkflow::ROLE_TYPE_ADMIN_GRC,
-            RiskApprovalWorkflow::ROLE_TYPE_APPROVAL_GRC,
-        ];
+        // superadmin-like dari role DB
+        if (static::hasSuperadminLikeRole()) {
+            $base['is_superadmin'] = true;
+            $base['impersonating'] = false;
+            $base['role_type']     = null;
 
-        if (! in_array($simRole, $allowed, true)) {
             return static::$cachedContext = $base;
         }
-
-        $simDiv = static::normalizeOrgPrefix((string) ($sim['org_prefix'] ?? ''));
-
-        if (in_array($simRole, [
-            RiskApprovalWorkflow::ROLE_TYPE_ADMIN_GRC,
-            RiskApprovalWorkflow::ROLE_TYPE_APPROVAL_GRC,
-        ], true)) {
-            $simDiv = 'GR';
-        }
-
-        $base['is_superadmin'] = false;
-        $base['impersonating'] = true;
-        $base['role_type']     = $simRole;
-        $base['org_prefix']    = $simDiv !== '' ? $simDiv : (string) ($base['org_prefix'] ?? '');
 
         return static::$cachedContext = $base;
     }
@@ -223,31 +325,68 @@ class LossEventApprovalWorkflow
         $actionable = static::actionableStatusesForCurrentUser();
 
         return $query->where(function (Builder $w) use ($actionable, $uid, $tbl) {
-           
             if (! empty($actionable)) {
                 $w->whereIn("{$tbl}.c_lostevent_status", $actionable);
             } else {
                 $w->whereRaw('1=0');
             }
 
-           if ($uid > 0) {
+            if ($uid > 0) {
                 $w->orWhereExists(function ($sq) use ($uid, $tbl) {
                     $sq->select(DB::raw(1))
                         ->from('activity_log as al')
                         ->whereColumn('al.subject_id', "{$tbl}.i_id_lostevent")
                         ->where(function ($x) {
                             $x->where('al.subject_type', Tmlostevent::class)
-                              ->orWhereRaw('LOWER(al.log_name) IN (?, ?)', ['lostevent', 'tmlostevent']);
+                                ->orWhereRaw('LOWER(al.log_name) IN (?, ?)', ['lostevent', 'tmlostevent']);
                         })
                         ->where('al.causer_id', $uid)
                         ->where(function ($x) {
                             $x->whereNull('al.event')
-                              ->orWhere('al.event', '!=', 'created');
+                                ->orWhere('al.event', '!=', 'created');
                         });
                 });
             }
         });
     }
+
+    public static function editableStatusesForCurrentUser(): array
+{
+    if (static::isSuper()) {
+        return [0, 14, 15, 16, 17];
+    }
+
+    return match (static::roleType()) {
+        RiskApprovalWorkflow::ROLE_TYPE_RSA_ENTRY    => [0],
+        RiskApprovalWorkflow::ROLE_TYPE_RISK_OFFICER => [0],
+        RiskApprovalWorkflow::ROLE_TYPE_KADIV        => [14],
+        RiskApprovalWorkflow::ROLE_TYPE_ADMIN_GRC    => [15],
+        RiskApprovalWorkflow::ROLE_TYPE_APPROVAL_GRC => [16],
+        default => [],
+    };
+}
+
+public static function canEditLossEventDataForCurrentUser(Tmlostevent $record): bool
+{
+    if (! static::isSuper()) {
+        $editable = static::editableStatusesForCurrentUser();
+        $status = (int) ($record->c_lostevent_status ?? 0);
+
+        if (! in_array($status, $editable, true)) {
+            return false;
+        }
+    }
+
+    $id = (int) ($record->getKey() ?? 0);
+    if ($id <= 0) {
+        return false;
+    }
+
+    $q = Tmlostevent::query()->whereKey($id);
+    $q = static::applyLossEventEntryScope($q);
+
+    return $q->exists();
+}
 
     public static function actionableStatusesForCurrentUser(): array
     {
@@ -281,7 +420,7 @@ class LossEventApprovalWorkflow
         }
 
         return match (static::roleType()) {
-            RiskApprovalWorkflow::ROLE_TYPE_RISK_OFFICER => ($status === 0)  ? 14 : null,
+            RiskApprovalWorkflow::ROLE_TYPE_RISK_OFFICER => ($status === 0) ? 14 : null,
             RiskApprovalWorkflow::ROLE_TYPE_KADIV        => ($status === 14) ? 15 : null,
             RiskApprovalWorkflow::ROLE_TYPE_ADMIN_GRC    => ($status === 15) ? 16 : null,
             RiskApprovalWorkflow::ROLE_TYPE_APPROVAL_GRC => ($status === 16) ? 17 : null,
@@ -304,8 +443,8 @@ class LossEventApprovalWorkflow
         }
 
         return match (static::roleType()) {
-            RiskApprovalWorkflow::ROLE_TYPE_RISK_OFFICER => ($status === 0)  ? 0  : null,
-            RiskApprovalWorkflow::ROLE_TYPE_KADIV        => ($status === 14) ? 0  : null,
+            RiskApprovalWorkflow::ROLE_TYPE_RISK_OFFICER => ($status === 0) ? 0 : null,
+            RiskApprovalWorkflow::ROLE_TYPE_KADIV        => ($status === 14) ? 0 : null,
             RiskApprovalWorkflow::ROLE_TYPE_ADMIN_GRC    => ($status === 15) ? 14 : null,
             RiskApprovalWorkflow::ROLE_TYPE_APPROVAL_GRC => match ($status) {
                 16 => 15,
@@ -327,9 +466,13 @@ class LossEventApprovalWorkflow
 
     public static function canApproveDeleteRequestForCurrentUser(int $status): bool
     {
-        if ($status !== static::STATUS_DELETE_REQUEST) return false;
+        if ($status !== static::STATUS_DELETE_REQUEST) {
+            return false;
+        }
 
-        if (static::isSuper()) return true;
+        if (static::isSuper()) {
+            return true;
+        }
 
         return static::roleType() === RiskApprovalWorkflow::ROLE_TYPE_APPROVAL_GRC;
     }
@@ -339,6 +482,7 @@ class LossEventApprovalWorkflow
         if ($status === static::STATUS_DELETE_REQUEST) {
             return static::canApproveDeleteRequestForCurrentUser($status);
         }
+
         return static::nextStatusOnApproveForCurrentUser($status) !== null;
     }
 
@@ -385,6 +529,7 @@ class LossEventApprovalWorkflow
             }
 
             $next = static::nextStatusOnApproveForCurrentUser($status);
+
             if ($next === null) {
                 throw new \RuntimeException('Status tidak bisa di-approve dari kondisi saat ini.');
             }
@@ -404,6 +549,7 @@ class LossEventApprovalWorkflow
             $status = (int) ($record->c_lostevent_status ?? 0);
 
             $next = static::nextStatusOnRejectForCurrentUser($status);
+
             if ($next === null) {
                 throw new \RuntimeException('Status tidak bisa di-reject dari kondisi saat ini.');
             }
@@ -444,7 +590,8 @@ class LossEventApprovalWorkflow
         if (str_contains($key, '|')) {
             [$year, $div] = array_pad(explode('|', $key, 2), 2, '-');
             $year = trim((string) $year) ?: '-';
-            $div  = trim((string) $div)  ?: '-';
+            $div  = trim((string) $div) ?: '-';
+
             return "{$year} — Divisi: {$div}";
         }
 
@@ -453,7 +600,9 @@ class LossEventApprovalWorkflow
 
     private static function divisionPrefixByEntryUser(int $entryUserId): string
     {
-        if ($entryUserId <= 0) return '';
+        if ($entryUserId <= 0) {
+            return '';
+        }
 
         try {
             $svc = app(EmployeeCacheService::class);
@@ -472,7 +621,9 @@ class LossEventApprovalWorkflow
     private static function employeeIdsForOrgPrefix(string $prefix): array
     {
         $prefix = static::normalizeOrgPrefix($prefix);
-        if ($prefix === '') return [];
+        if ($prefix === '') {
+            return [];
+        }
 
         try {
             $svc = app(EmployeeCacheService::class);
@@ -481,17 +632,23 @@ class LossEventApprovalWorkflow
             $ids = [];
 
             foreach ($data as $r) {
-                if (! is_array($r)) continue;
+                if (! is_array($r)) {
+                    continue;
+                }
 
                 $org = trim((string) ($r['organisasi'] ?? $r['organization'] ?? $r['org'] ?? ''));
-                if (static::normalizeOrgPrefix($org) !== $prefix) continue;
+                if (static::normalizeOrgPrefix($org) !== $prefix) {
+                    continue;
+                }
 
                 $id = (int) ($r['id'] ?? 0);
                 if ($id <= 0) {
                     $id = (int) preg_replace('/\D+/', '', (string) ($r['nik'] ?? ''));
                 }
 
-                if ($id > 0) $ids[] = $id;
+                if ($id > 0) {
+                    $ids[] = $id;
+                }
             }
 
             return array_values(array_unique($ids));
@@ -503,7 +660,9 @@ class LossEventApprovalWorkflow
     private static function normalizeOrgPrefix(?string $value): string
     {
         $value = trim((string) $value);
-        if ($value === '') return '';
+        if ($value === '') {
+            return '';
+        }
 
         if (preg_match('/^([A-Za-z]{2})/', $value, $m)) {
             return strtoupper($m[1]);

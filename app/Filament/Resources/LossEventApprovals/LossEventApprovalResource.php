@@ -30,7 +30,7 @@ class LossEventApprovalResource extends BaseResource
 
     protected static function hasApprovePermission(): bool
     {
-        if (LossEventApprovalWorkflow::isRealSuperadmin()) {
+        if (LossEventApprovalWorkflow::isSuper()) {
             return true;
         }
 
@@ -53,9 +53,21 @@ class LossEventApprovalResource extends BaseResource
             );
     }
 
+    public static function canRejectRecord(Model $record): bool
+    {
+        $status = (int) ($record->c_lostevent_status ?? Tmlostevent::STATUS_DRAFT);
+        $next = LossEventApprovalWorkflow::nextStatusOnRejectForCurrentUser($status);
+
+        return static::hasApprovePermission()
+            && $next !== null
+            && $next !== $status;
+    }
+
     public static function hasAnyRowAction(Model $record): bool
     {
-        return static::canApproveRecord($record) || static::canDeleteRecord($record);
+        return static::canApproveRecord($record)
+            || static::canDeleteRecord($record)
+            || static::canRejectRecord($record);
     }
 
     public static function shouldRegisterNavigation(): bool
@@ -85,7 +97,7 @@ class LossEventApprovalResource extends BaseResource
 
     public static function canEdit(Model $record): bool
     {
-        return static::hasApprovePermission();
+        return false;
     }
 
     public static function canDelete(Model $record): bool

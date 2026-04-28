@@ -207,6 +207,19 @@ class RiskResource extends BaseResource
         ], fn ($value): bool => filled($value));
     }
 
+    public static function canEdit(Model $record): bool
+    {
+        if (! parent::canEdit($record)) {
+            return false;
+        }
+
+        if (! $record instanceof Tmrisk) {
+            return false;
+        }
+
+        return RiskApprovalWorkflow::canEditRiskDataForCurrentUser($record);
+    }
+
     public static function form(Schema $schema): Schema
     {
         return RiskForm::configure($schema);

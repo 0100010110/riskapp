@@ -18,10 +18,10 @@ use Illuminate\Database\Eloquent\Builder;
 
 class LossEventApprovalsTable
 {
-    /** @var array<int,string> cache userId => orgPrefix */
+    /** @var array<int,string> */
     protected static array $creatorOrgPrefixCache = [];
 
-    /** @var array<string, array>|null cache nik(string) => employeeRow */
+    /** @var array<string, array>|null */
     protected static ?array $employeeNikIndex = null;
 
     public static function configure(Table $table): Table
@@ -41,10 +41,8 @@ class LossEventApprovalsTable
                     ->orderByDesc($lostTable . '.d_lost_event')
                     ->orderByDesc($lostTable . '.i_id_lostevent');
             })
-
             ->recordUrl(null)
             ->recordAction(null)
-
             ->groups([
                 Group::make('approval_group')
                     ->label('Group')
@@ -87,7 +85,10 @@ class LossEventApprovalsTable
                     ->label('Event Date')
                     ->sortable()
                     ->formatStateUsing(function ($state) {
-                        if (! $state) return '';
+                        if (! $state) {
+                            return '';
+                        }
+
                         try {
                             $dt = $state instanceof Carbon ? $state : Carbon::parse($state);
                             return $dt->format('Y-m-d');
@@ -111,20 +112,45 @@ class LossEventApprovalsTable
                     ->wrap()
                     ->searchable(),
 
-                Tables\Columns\TextColumn::make('c_lostevent_status')
+                Tables\Columns\ViewColumn::make('status_tracker')
                     ->label('Status')
-                    ->sortable()
-                    ->formatStateUsing(function ($state, Tmlostevent $record): string {
-                        return method_exists($record, 'statusLabelWithActor')
-                            ? (string) $record->statusLabelWithActor()
-                            : (string) ((int) ($state ?? 0));
-                    }),
+                    ->view('filament.tables.columns.loss-event-status-tracker')
+                    ->sortable(query: fn (Builder $query, string $direction): Builder => $query->orderBy($lostTable . '.c_lostevent_status', $direction))
+                    ->searchable(query: function (Builder $query, string $search) use ($lostTable): Builder {
+                        $needle = strtolower(trim($search));
+
+                        $matchedCodes = collect(Tmlostevent::statusOptions())
+                            ->filter(fn (string $label, int $code): bool =>
+                                str_contains(strtolower($label), $needle)
+                                || str_contains((string) $code, $needle)
+                            )
+                            ->keys()
+                            ->all();
+
+                        return $query->where(function (Builder $q) use ($matchedCodes, $lostTable) {
+                            if ($matchedCodes !== []) {
+                                $q->whereIn($lostTable . '.c_lostevent_status', $matchedCodes);
+                            } else {
+                                $q->whereRaw('1 = 0');
+                            }
+                        });
+                    })
+                    ->url(null)
+                    ->extraAttributes([
+                        'class' => 'w-full',
+                        'x-on:mousedown.stop.prevent' => '$event.stopPropagation()',
+                        'x-on:mouseup.stop.prevent' => '$event.stopPropagation()',
+                        'x-on:click.stop.prevent' => '$event.stopPropagation()',
+                    ]),
 
                 Tables\Columns\TextColumn::make('d_entry')
                     ->label('Submitted At')
                     ->sortable()
                     ->formatStateUsing(function ($state) {
-                        if (! $state) return '';
+                        if (! $state) {
+                            return '';
+                        }
+
                         try {
                             $dt = $state instanceof Carbon ? $state : Carbon::parse($state);
                             return $dt->format('Y-m-d') . '<br>' . $dt->format('H:i:s');
@@ -203,6 +229,33 @@ class LossEventApprovalsTable
                                     ->send();
                             }
                         }),
+
+                    Actions\Action::make('reject')
+                        ->label('Reject')
+                        ->color('danger')
+                        ->icon(Heroicon::OutlinedXCircle)
+                        ->visible(fn (Tmlostevent $record): bool =>
+                            LossEventApprovalResource::canRejectRecord($record)
+                        )
+                        ->requiresConfirmation()
+                        ->modalHeading('Reject Loss Event')
+                        ->modalDescription('Status approval akan dikembalikan ke 1 tingkat sebelumnya. Lanjutkan?')
+                        ->action(function (Tmlostevent $record): void {
+                            try {
+                                LossEventApprovalWorkflow::reject($record);
+
+                                Notification::make()
+                                    ->success()
+                                    ->title('Reject berhasil diproses')
+                                    ->send();
+                            } catch (\Throwable $e) {
+                                Notification::make()
+                                    ->danger()
+                                    ->title('Reject gagal diproses')
+                                    ->body($e->getMessage())
+                                    ->send();
+                            }
+                        }),
                 ])
                     ->icon(Heroicon::OutlinedBars3)
                     ->label('')
@@ -262,7 +315,9 @@ class LossEventApprovalsTable
     protected static function employeeRowByNik(string $nik, EmployeeCacheService $svc): ?array
     {
         $nik = trim($nik);
-        if ($nik === '') return null;
+        if ($nik === '') {
+            return null;
+        }
 
         if (static::$employeeNikIndex === null) {
             static::$employeeNikIndex = [];
@@ -271,10 +326,14 @@ class LossEventApprovalsTable
                 $data = $svc->data();
                 if (is_iterable($data)) {
                     foreach ($data as $r) {
-                        if (! is_array($r)) continue;
+                        if (! is_array($r)) {
+                            continue;
+                        }
 
                         $nk = trim((string) ($r['nik'] ?? ''));
-                        if ($nk === '') continue;
+                        if ($nk === '') {
+                            continue;
+                        }
 
                         if (! isset(static::$employeeNikIndex[$nk])) {
                             static::$employeeNikIndex[$nk] = $r;

@@ -10,7 +10,7 @@ class EditRiskMitigation extends EditRecord
 {
     protected static string $resource = RiskMitigationResource::class;
 
-    protected function getActions(): array
+    protected function getHeaderActions(): array
     {
         return [
             Actions\DeleteAction::make()
