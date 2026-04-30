@@ -11,11 +11,7 @@ class CreateScale extends CreateRecord
 
     protected function mutateFormDataBeforeCreate(array $data): array
     {
-        $data['v_scale'] = ScaleResource::makeScaleCode(
-            $data['c_scale_type'] ?? null,
-            $data['f_scale_finance'] ?? null,
-            $data['i_scale'] ?? null,
-        );
+        $data['v_scale'] = strtoupper(trim((string) ($data['v_scale'] ?? '')));
 
         return $data;
     }

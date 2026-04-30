@@ -7,9 +7,12 @@ use App\Filament\Resources\UserRoles\Pages;
 use App\Filament\Resources\UserRoles\Schemas\UserRoleForm;
 use App\Filament\Resources\UserRoles\Tables\UserRolesTable;
 use App\Models\Truserrole;
+use App\Policies\SuperadminPolicy;
+use App\Support\RoleCatalog;
 use BackedEnum;
 use Filament\Schemas\Schema;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Model;
 use UnitEnum;
 
 class UserRoleResource extends BaseResource
@@ -41,5 +44,39 @@ class UserRoleResource extends BaseResource
             'create' => Pages\CreateUserRole::route('/create'),
             'edit'   => Pages\EditUserRole::route('/{record}/edit'),
         ];
+    }
+
+    
+    public static function canEdit(Model $record): bool
+    {
+        if (! parent::canEdit($record)) {
+            return false;
+        }
+
+        if ($record instanceof Truserrole) {
+            $roleId = (int) ($record->i_id_role ?? 0);
+            if (RoleCatalog::isSuperadminRoleId($roleId) && ! SuperadminPolicy::isSuperadmin(auth()->user())) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    
+    public static function canDelete(Model $record): bool
+    {
+        if (! parent::canDelete($record)) {
+            return false;
+        }
+
+        if ($record instanceof Truserrole) {
+            $roleId = (int) ($record->i_id_role ?? 0);
+            if (RoleCatalog::isSuperadminRoleId($roleId) && ! SuperadminPolicy::isSuperadmin(auth()->user())) {
+                return false;
+            }
+        }
+
+        return true;
     }
 }

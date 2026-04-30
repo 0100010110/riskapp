@@ -10,10 +10,13 @@ use App\Filament\Resources\Risks\Tables\RisksTable;
 use App\Models\Tmrisk;
 use App\Support\PermissionBitmask;
 use App\Support\RiskApprovalWorkflow;
+use App\Support\TaxonomyFormatter;
 use BackedEnum;
 use Filament\Schemas\Schema;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Str;
 use UnitEnum;
 
 class RiskResource extends BaseResource
@@ -137,6 +140,84 @@ class RiskResource extends BaseResource
         $q = RiskApprovalWorkflow::applyApprovalListScope($q);
 
         return $q->exists();
+    }
+
+    /**
+     * @return array<string>
+     */
+    public static function getGloballySearchableAttributes(): array
+    {
+        return [
+            'i_risk',
+            'e_risk_event',
+            'c_org_owner',
+            'c_risk_year',
+            'taxonomy.c_taxonomy',
+            'taxonomy.n_taxonomy',
+        ];
+    }
+
+    public static function getGlobalSearchEloquentQuery(): Builder
+    {
+        $query = parent::getGlobalSearchEloquentQuery()
+            ->with([
+                'taxonomy',
+                'latestApproval',
+            ]);
+
+        return RiskApprovalWorkflow::applyRiskRegisterScope($query);
+    }
+
+    public static function getGlobalSearchResultTitle(Model $record): string
+    {
+        /** @var Tmrisk $record */
+        $riskNo = trim((string) ($record->i_risk ?? ''));
+        $riskEvent = trim((string) ($record->e_risk_event ?? ''));
+
+        $parts = array_values(array_filter([
+            $riskNo,
+            $riskEvent !== '' ? Str::limit($riskEvent, 90) : '',
+        ]));
+
+        return $parts !== []
+            ? implode(' — ', $parts)
+            : 'Risk Register #' . (string) $record->getKey();
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public static function getGlobalSearchResultDetails(Model $record): array
+    {
+        /** @var Tmrisk $record */
+        $taxonomyCode = TaxonomyFormatter::formatCode(
+            $record->taxonomy?->c_taxonomy,
+            (int) ($record->taxonomy?->c_taxonomy_level ?? 0),
+        );
+
+        $taxonomyName = trim((string) ($record->taxonomy?->n_taxonomy ?? ''));
+        $taxonomy = trim(implode(' - ', array_values(array_filter([$taxonomyCode, $taxonomyName]))));
+
+        return array_filter([
+            'Risk Event' => trim((string) ($record->e_risk_event ?? '')),
+            'Taxonomy' => $taxonomy,
+            'Divisi' => trim((string) ($record->c_org_owner ?? '')),
+            'Tahun' => trim((string) ($record->c_risk_year ?? '')),
+            'Status' => trim($record->statusLabelWithActor()),
+        ], fn ($value): bool => filled($value));
+    }
+
+    public static function canEdit(Model $record): bool
+    {
+        if (! parent::canEdit($record)) {
+            return false;
+        }
+
+        if (! $record instanceof Tmrisk) {
+            return false;
+        }
+
+        return RiskApprovalWorkflow::canEditRiskDataForCurrentUser($record);
     }
 
     public static function form(Schema $schema): Schema

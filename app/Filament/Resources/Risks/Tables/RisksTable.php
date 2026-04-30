@@ -4,23 +4,71 @@ namespace App\Filament\Resources\Risks\Tables;
 
 use App\Filament\Resources\Risks\RiskResource;
 use App\Models\Tmrisk;
+use App\Support\RiskApprovalWorkflow;
 use App\Support\TaxonomyFormatter;
-use Carbon\Carbon;
 use Filament\Actions;
 use Filament\Notifications\Notification;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables;
-use Filament\Tables\Table;
-use Filament\Tables\Grouping\Group;
 use Filament\Tables\Filters\Filter;
-use Illuminate\Database\QueryException;
+use Filament\Tables\Grouping\Group;
+use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
-use App\Support\RiskWorkflow;
+use Illuminate\Database\QueryException;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 
 class RisksTable
 {
     public static function configure(Table $table): Table
     {
+        $ctx = RiskApprovalWorkflow::context();
+        $userId = (int) ($ctx['user_id'] ?? 0);
+        $orgPrefix = trim((string) ($ctx['org_prefix'] ?? ''));
+        $roleType = (string) ($ctx['role_type'] ?? '');
+        $isSuper = (bool) ($ctx['is_superadmin'] ?? false);
+
+        $empId = RiskApprovalWorkflow::currentEmpId();
+        $actionableStatuses = RiskApprovalWorkflow::actionableStatusesForCurrentUser();
+        $riskTable = (new Tmrisk())->getTable();
+        $approvalTable = 'tmriskapprove';
+
+        $applyPendingApprovalFilter = function (Builder $query) use (
+            $actionableStatuses,
+            $approvalTable,
+            $empId,
+            $isSuper,
+            $riskTable,
+            $roleType
+        ): Builder {
+            if ($actionableStatuses === []) {
+                return $query->whereRaw('1 = 0');
+            }
+
+            $query->whereIn($riskTable . '.c_risk_status', $actionableStatuses);
+
+            if ($isSuper || $empId <= 0 || $roleType === RiskApprovalWorkflow::ROLE_TYPE_RSA_ENTRY) {
+                return $query;
+            }
+
+            return $query->where(function (Builder $pending) use ($approvalTable, $empId, $riskTable) {
+                $pending->whereNotExists(function ($sub) use ($approvalTable, $empId, $riskTable) {
+                    $sub->select(DB::raw(1))
+                        ->from($approvalTable . ' as ra')
+                        ->whereColumn('ra.i_id_risk', $riskTable . '.i_id_risk')
+                        ->where('ra.i_emp', $empId);
+                })->orWhereExists(function ($sub) use ($approvalTable, $empId, $riskTable) {
+                    $sub->select(DB::raw(1))
+                        ->from($approvalTable . ' as ra')
+                        ->whereColumn('ra.i_id_risk', $riskTable . '.i_id_risk')
+                        ->where('ra.i_emp', $empId)
+                        ->whereRaw(
+                            "COALESCE(ra.d_entry, CURRENT_TIMESTAMP) < COALESCE({$riskTable}.d_update, {$riskTable}.d_entry)"
+                        );
+                });
+            });
+        };
+
         return $table
             ->toolbarActions([
                 Actions\Action::make('print_risk_register')
@@ -29,20 +77,17 @@ class RisksTable
                     ->color('warning')
                     ->action(fn ($livewire) => $livewire->handlePrintToolbarAction()),
             ])
-
             ->selectable(fn ($livewire) => (bool) ($livewire->printMode ?? false))
-
-            ->currentSelectionLivewireProperty(fn ($livewire) =>
-                (bool) ($livewire->printMode ?? false)
-                    ? 'printSelectedRecordIds'
-                    : null
+            ->currentSelectionLivewireProperty(
+                fn ($livewire) => (bool) ($livewire->printMode ?? false) ? 'printSelectedRecordIds' : null
             )
-
             ->deselectAllRecordsWhenFiltered(false)
             ->selectCurrentPageOnly(false)
-
-            ->modifyQueryUsing(fn (Builder $query) => $query->with(['taxonomy']))
-
+            ->modifyQueryUsing(fn (Builder $query) => $query->with([
+                'taxonomy',
+                'approvals.role',
+                'latestApproval',
+            ]))
             ->filters([
                 Filter::make('need_action')
                     ->label('Need Action')
@@ -60,30 +105,49 @@ class RisksTable
                                     );
                             });
                     }),
+                Filter::make('my_drafts')
+                    ->label('Draft saya')
+                    ->query(fn (Builder $query): Builder => $query
+                        ->where($riskTable . '.i_entry', $userId)
+                        ->where($riskTable . '.c_risk_status', 0)),
+                Filter::make('my_division_risks')
+                    ->label('Risk divisi saya')
+                    ->query(fn (Builder $query): Builder => $orgPrefix !== ''
+                        ? $query->where($riskTable . '.c_org_owner', $orgPrefix)
+                        : $query->whereRaw('1 = 0')),
+                Filter::make('my_pending_approvals')
+                    ->label('Pending approval saya')
+                    ->query(fn (Builder $query): Builder => $applyPendingApprovalFilter($query)),
+                Filter::make('current_year_risks')
+                    ->label('Risk tahun ini')
+                    ->query(fn (Builder $query): Builder => $query->where($riskTable . '.c_risk_year', (string) now()->year)),
+                Filter::make('primary_risks_only')
+                    ->label('Primary risk saja')
+                    ->query(fn (Builder $query): Builder => $query->where($riskTable . '.f_risk_primary', true)),
             ])
-
             ->groups([
                 Group::make('c_risk_year')
                     ->label('Tahun')
                     ->collapsible()
-                    ->getKeyFromRecordUsing(fn (Tmrisk $record): string =>
-                        trim((string) ($record->c_risk_year ?? ''))
+                    ->getKeyFromRecordUsing(
+                        fn (Tmrisk $record): string => trim((string) ($record->c_risk_year ?? ''))
                     )
-                    ->getTitleFromRecordUsing(fn (Tmrisk $record): string =>
-                        trim((string) ($record->c_risk_year ?? '')) ?: '-'
+                    ->getTitleFromRecordUsing(
+                        fn (Tmrisk $record): string => trim((string) ($record->c_risk_year ?? '')) ?: '-'
                     ),
             ])
             ->defaultGroup('c_risk_year')
-
             ->columns([
                 Tables\Columns\TextColumn::make('taxonomy.c_taxonomy')
                     ->label('Taxonomy Code')
                     ->sortable()
                     ->searchable()
-                    ->formatStateUsing(fn ($state, Tmrisk $record) => TaxonomyFormatter::formatCode(
-                        $state,
-                        (int) ($record->taxonomy?->c_taxonomy_level ?? null)
-                    )),
+                    ->formatStateUsing(
+                        fn ($state, Tmrisk $record) => TaxonomyFormatter::formatCode(
+                            $state,
+                            (int) ($record->taxonomy?->c_taxonomy_level ?? null)
+                        )
+                    ),
 
                 Tables\Columns\TextColumn::make('taxonomy.n_taxonomy')
                     ->label('Taxonomy Name')
@@ -115,15 +179,36 @@ class RisksTable
                     ->boolean()
                     ->sortable(),
 
-                Tables\Columns\TextColumn::make('c_risk_status')
+                Tables\Columns\ViewColumn::make('status_tracker')
                     ->label('Status')
-                    ->sortable()
-                    ->wrap()
-                    ->lineClamp(2)
+                    ->view('filament.tables.columns.risk-status-tracker')
+                    ->sortable(query: fn (Builder $query, string $direction): Builder => $query->orderBy('c_risk_status', $direction))
+                    ->searchable(query: function (Builder $query, string $search): Builder {
+                        $needle = strtolower(trim($search));
+
+                        $matchedCodes = collect(Tmrisk::statusOptions())
+                            ->filter(fn (string $label, int $code): bool =>
+                                str_contains(strtolower($label), $needle)
+                                || str_contains((string) $code, $needle)
+                            )
+                            ->keys()
+                            ->all();
+
+                        return $query->where(function (Builder $q) use ($matchedCodes) {
+                            if ($matchedCodes !== []) {
+                                $q->whereIn('c_risk_status', $matchedCodes);
+                            } else {
+                                $q->whereRaw('1 = 0');
+                            }
+                        });
+                    })
+                    ->url(null)
                     ->extraAttributes([
-                        'class' => 'whitespace-normal break-words max-w-xs',
-                    ])
-                    ->formatStateUsing(fn ($state, Tmrisk $record) => $record->statusLabelWithActor()),
+                        'class' => 'w-full',
+                        'x-on:mousedown.stop.prevent' => '$event.stopPropagation()',
+                        'x-on:mouseup.stop.prevent' => '$event.stopPropagation()',
+                        'x-on:click.stop.prevent' => '$event.stopPropagation()',
+                    ]),
 
                 Tables\Columns\TextColumn::make('d_entry')
                     ->label('Created At')
@@ -135,6 +220,7 @@ class RisksTable
 
                         try {
                             $dt = $state instanceof Carbon ? $state : Carbon::parse($state);
+
                             return $dt->format('M d, Y') . '<br>' . $dt->format('H:i:s');
                         } catch (\Throwable) {
                             return (string) $state;
@@ -142,7 +228,6 @@ class RisksTable
                     })
                     ->html(),
             ])
-
             ->recordActions([
                 Actions\ActionGroup::make([
                     Actions\Action::make('use_for_current_year')
@@ -153,16 +238,20 @@ class RisksTable
                         ->modalHeading('Gunakan untuk Tahun ini')
                         ->modalDescription(function (Tmrisk $record): string {
                             $thisYear = (int) now()->format('Y');
-                            $oldYear  = trim((string) ($record->c_risk_year ?? ''));
+                            $oldYear = trim((string) ($record->c_risk_year ?? ''));
+
                             return "Akan membuat Risk Register baru (copy dari tahun {$oldYear}) untuk tahun {$thisYear}.\n"
-                                . "Nomor Risiko akan dikosongkan, dan Status kembali menjadi Draft.";
+                                . 'Nomor Risiko akan dikosongkan, dan Status kembali menjadi Draft.';
                         })
                         ->visible(function (Tmrisk $record): bool {
                             $thisYear = (int) now()->format('Y');
                             $year = is_numeric($record->c_risk_year) ? (int) $record->c_risk_year : 0;
-                            return $year > 0 && $year < $thisYear && RiskResource::canCreate();
+
+                            return $year > 0
+                                && $year < $thisYear
+                                && RiskResource::canCreate();
                         })
-                        ->action(function (Tmrisk $record, $livewire) {
+                        ->action(function (Tmrisk $record) {
                             $thisYear = (string) now()->format('Y');
 
                             $new = $record->replicate();
@@ -171,17 +260,19 @@ class RisksTable
                                 unset($new->{$col});
                             }
 
-                            $new->c_risk_year   = $thisYear;
-                            $new->i_risk        = 'null';
-                            $new->c_risk_status = 0;
+                            $pk = $record->getKeyName();
+                            if ($pk) {
+                                unset($new->{$pk});
+                            }
 
-                            $new->setKeyName($record->getKeyName());
-                            $new->{$record->getKeyName()} = null;
+                            $new->setAttribute('c_risk_year', $thisYear);
+                            $new->setAttribute('i_risk', null);
+                            $new->setAttribute('c_risk_status', 0);
 
                             try {
                                 $new->save();
-                            } catch (QueryException $e) {
-                                $new->i_risk = 'TEMP';
+                            } catch (QueryException) {
+                                $new->setAttribute('i_risk', 'TEMP');
                                 $new->save();
                             }
 
@@ -202,9 +293,13 @@ class RisksTable
                 ])
                     ->icon(Heroicon::OutlinedEllipsisVertical)
                     ->visible(fn ($record) =>
-                        RiskResource::canEdit($record) ||
-                        RiskResource::canDelete($record) ||
-                        (RiskResource::canCreate() && is_numeric($record->c_risk_year) && (int) $record->c_risk_year < (int) now()->format('Y'))
+                        RiskResource::canEdit($record)
+                        || RiskResource::canDelete($record)
+                        || (
+                            RiskResource::canCreate()
+                            && is_numeric($record->c_risk_year)
+                            && (int) $record->c_risk_year < (int) now()->format('Y')
+                        )
                     ),
             ]);
     }

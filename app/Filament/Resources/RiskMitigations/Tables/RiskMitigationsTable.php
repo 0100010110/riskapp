@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\RiskMitigations\Tables;
 
 use App\Filament\Resources\RiskMitigations\RiskMitigationResource;
+use App\Services\EmployeeCacheService;
 use App\Support\RiskApprovalWorkflow;
 use Filament\Actions;
 use Filament\Notifications\Notification;
@@ -18,6 +19,73 @@ class RiskMitigationsTable
         1 => 'Jan', 2 => 'Feb', 3 => 'Mar', 4 => 'Apr', 5 => 'May', 6 => 'Jun',
         7 => 'Jul', 8 => 'Aug', 9 => 'Sep', 10 => 'Oct', 11 => 'Nov', 12 => 'Dec',
     ];
+
+    protected static function employeeNameFromRow(?array $row): string
+    {
+        if (! is_array($row)) {
+            return '';
+        }
+
+        return trim((string) ($row['nama'] ?? $row['name'] ?? $row['n_name'] ?? ''));
+    }
+
+    protected static function employeeRowByNik(string $nik, EmployeeCacheService $svc): ?array
+    {
+        $nik = trim($nik);
+
+        if ($nik === '') {
+            return null;
+        }
+
+        try {
+            foreach ($svc->data() as $row) {
+                if (! is_array($row)) {
+                    continue;
+                }
+
+                if (trim((string) ($row['nik'] ?? '')) === $nik) {
+                    return $row;
+                }
+            }
+        } catch (\Throwable) {
+            return null;
+        }
+
+        return null;
+    }
+
+    protected static function resolveCreatedByName($state): string
+    {
+        if ($state === null || $state === '') {
+            return '-';
+        }
+
+        $raw = trim((string) $state);
+
+        if ($raw === '') {
+            return '-';
+        }
+
+        try {
+            $svc = app(EmployeeCacheService::class);
+
+            $row = null;
+
+            if (ctype_digit($raw)) {
+                $row = $svc->findById((int) $raw);
+            }
+
+            if (! is_array($row)) {
+                $row = self::employeeRowByNik($raw, $svc);
+            }
+
+            $name = self::employeeNameFromRow($row);
+
+            return $name !== '' ? $name : $raw;
+        } catch (\Throwable) {
+            return $raw;
+        }
+    }
 
     protected static function applyScope(Builder $query): Builder
     {
@@ -47,6 +115,7 @@ class RiskMitigationsTable
             if ($org === '') {
                 return $query->whereRaw('1=0');
             }
+
             return $query->whereHas('riskInherent.risk', fn (Builder $q) => $q->where('c_org_owner', $org));
         }
 
@@ -113,8 +182,14 @@ class RiskMitigationsTable
                         return self::formatMonthRanges($months);
                     }),
 
-                Tables\Columns\TextColumn::make('i_entry')->label('Created By'),
-                Tables\Columns\TextColumn::make('d_entry')->label('Created At')->dateTime(),
+                Tables\Columns\TextColumn::make('i_entry')
+                    ->label('Created By')
+                    ->formatStateUsing(fn ($state): string => self::resolveCreatedByName($state))
+                    ->searchable(),
+
+                Tables\Columns\TextColumn::make('d_entry')
+                    ->label('Created At')
+                    ->dateTime(),
             ])
 
             ->recordActions([
@@ -167,6 +242,7 @@ class RiskMitigationsTable
     {
         $bin = preg_replace('/[^01]/', '', $bin) ?? '';
         $bin = substr($bin, 0, 12);
+
         return str_pad($bin, 12, '0', STR_PAD_RIGHT);
     }
 

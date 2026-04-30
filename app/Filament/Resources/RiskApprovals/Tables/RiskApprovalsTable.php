@@ -47,7 +47,11 @@ class RiskApprovalsTable
         ) {
             $q = Tmrisk::query()
                 ->select($riskTable . '.*')
-                ->with(['taxonomy', 'latestApproval.role']);
+                ->with([
+                    'taxonomy',
+                    'approvals.role',
+                    'latestApproval.role',
+                ]);
 
             $q->selectRaw("COALESCE({$riskTable}.d_update, {$riskTable}.d_entry) as updated_at_sort");
 
@@ -130,9 +134,7 @@ class RiskApprovalsTable
                 Group::make('approval_group')
                     ->label('Group')
                     ->collapsible()
-
                     ->orderQueryUsing(fn (Builder $query, string $direction) => $query)
-
                     ->getKeyFromRecordUsing(fn (Tmrisk $record): string =>
                         trim((string) ($record->approval_group ?? '')) ?: '-'
                     )
@@ -143,6 +145,7 @@ class RiskApprovalsTable
                             [$year, $div] = array_pad(explode('|', $key, 2), 2, '-');
                             $year = trim((string) $year) ?: '-';
                             $div  = trim((string) $div) ?: '-';
+
                             return "{$year} — Divisi: {$div}";
                         }
 
@@ -176,16 +179,36 @@ class RiskApprovalsTable
                     ->limit(70)
                     ->wrap(),
 
-                Tables\Columns\TextColumn::make('c_risk_status')
+                Tables\Columns\ViewColumn::make('status_tracker')
                     ->label('Status')
-                    ->sortable()
-                    ->wrap()
-                    ->lineClamp(3)
+                    ->view('filament.tables.columns.risk-status-tracker')
+                    ->sortable(query: fn (Builder $query, string $direction): Builder => $query->orderBy($riskTable . '.c_risk_status', $direction))
+                    ->searchable(query: function (Builder $query, string $search): Builder {
+                        $needle = strtolower(trim($search));
+
+                        $matchedCodes = collect(Tmrisk::statusOptions())
+                            ->filter(fn (string $label, int $code): bool =>
+                                str_contains(strtolower($label), $needle)
+                                || str_contains((string) $code, $needle)
+                            )
+                            ->keys()
+                            ->all();
+
+                        return $query->where(function (Builder $q) use ($matchedCodes, $riskTable) {
+                            if ($matchedCodes !== []) {
+                                $q->whereIn($riskTable . '.c_risk_status', $matchedCodes);
+                            } else {
+                                $q->whereRaw('1 = 0');
+                            }
+                        });
+                    })
+                    ->url(null)
                     ->extraAttributes([
-                        'class' => 'whitespace-normal break-words max-w-sm',
-                        'style' => 'white-space: normal !important;',
-                    ])
-                    ->formatStateUsing(fn ($state, Tmrisk $record) => $record->statusLabelWithActor()),
+                        'class' => 'w-full',
+                        'x-on:mousedown.stop.prevent' => '$event.stopPropagation()',
+                        'x-on:mouseup.stop.prevent' => '$event.stopPropagation()',
+                        'x-on:click.stop.prevent' => '$event.stopPropagation()',
+                    ]),
 
                 Tables\Columns\TextColumn::make('updated_at_sort')
                     ->label('Updated At')
@@ -196,10 +219,13 @@ class RiskApprovalsTable
                             ->orderByDesc($riskTable . '.i_id_risk');
                     })
                     ->formatStateUsing(function ($state) {
-                        if (! $state) return '';
+                        if (! $state) {
+                            return '';
+                        }
 
                         try {
                             $dt = $state instanceof Carbon ? $state : Carbon::parse($state);
+
                             return $dt->format('Y-m-d') . '<br>' . $dt->format('H:i:s');
                         } catch (\Throwable) {
                             return (string) $state;

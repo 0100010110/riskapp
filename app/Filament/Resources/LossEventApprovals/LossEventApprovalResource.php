@@ -6,7 +6,8 @@ use App\Filament\Resources\BaseResource;
 use App\Filament\Resources\LossEventApprovals\Pages;
 use App\Filament\Resources\LossEventApprovals\Tables\LossEventApprovalsTable;
 use App\Models\Tmlostevent;
-use App\Support\RiskApprovalWorkflow;
+use App\Support\LossEventApprovalWorkflow;
+use App\Support\PermissionBitmask;
 use BackedEnum;
 use Filament\Schemas\Schema;
 use Filament\Tables\Table;
@@ -29,12 +30,44 @@ class LossEventApprovalResource extends BaseResource
 
     protected static function hasApprovePermission(): bool
     {
-        if (RiskApprovalWorkflow::isRealSuperadmin()) {
+        if (LossEventApprovalWorkflow::isSuper()) {
             return true;
         }
 
-        // 16 = Approve
-        return static::perm()->can(static::getMenuIdentifiers(), 16);
+        return static::perm()->can(static::getMenuIdentifiers(), PermissionBitmask::APPROVE);
+    }
+
+    public static function canApproveRecord(Model $record): bool
+    {
+        return static::hasApprovePermission()
+            && LossEventApprovalWorkflow::canApproveStatusForCurrentUser(
+                (int) ($record->c_lostevent_status ?? Tmlostevent::STATUS_DRAFT)
+            );
+    }
+
+    public static function canDeleteRecord(Model $record): bool
+    {
+        return static::hasApprovePermission()
+            && LossEventApprovalWorkflow::canRequestDeleteForCurrentUser(
+                (int) ($record->c_lostevent_status ?? Tmlostevent::STATUS_DRAFT)
+            );
+    }
+
+    public static function canRejectRecord(Model $record): bool
+    {
+        $status = (int) ($record->c_lostevent_status ?? Tmlostevent::STATUS_DRAFT);
+        $next = LossEventApprovalWorkflow::nextStatusOnRejectForCurrentUser($status);
+
+        return static::hasApprovePermission()
+            && $next !== null
+            && $next !== $status;
+    }
+
+    public static function hasAnyRowAction(Model $record): bool
+    {
+        return static::canApproveRecord($record)
+            || static::canDeleteRecord($record)
+            || static::canRejectRecord($record);
     }
 
     public static function shouldRegisterNavigation(): bool
@@ -59,17 +92,17 @@ class LossEventApprovalResource extends BaseResource
 
     public static function canCreate(): bool
     {
-        return static::hasApprovePermission();
+        return false;
     }
 
     public static function canEdit(Model $record): bool
     {
-        return static::hasApprovePermission();
+        return false;
     }
 
     public static function canDelete(Model $record): bool
     {
-        return static::hasApprovePermission();
+        return false;
     }
 
     public static function getEloquentQuery(): Builder

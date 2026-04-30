@@ -5,21 +5,21 @@ namespace App\Filament\Resources\Risks\Schemas;
 use App\Models\Tmrisk;
 use App\Models\Tmtaxonomy;
 use App\Support\RiskApprovalWorkflow;
+use Filament\Forms\Components\Hidden;
 use Filament\Forms\Components\Select;
+use Filament\Forms\Components\TagsInput;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
 use Filament\Schemas\Components\Section;
+use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Components\Utilities\Set;
 use Filament\Schemas\Components\Wizard\Step;
 use Filament\Schemas\Schema;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\HtmlString;
 
 class RiskForm
 {
-    /**
-     * Setelah status >= 4 (Approved Tahap 1 RSA),
-     * bagian atas jadi readonly, bagian KRI+Exposure baru boleh diedit.
-     */
     private const STATUS_TAHAP1_APPROVED = 4;
 
     private static function isViewMode(): bool
@@ -29,6 +29,61 @@ class RiskForm
         } catch (\Throwable) {
             return false;
         }
+    }
+
+    private static function isViewPage(): bool
+    {
+        if (self::isViewMode()) {
+            return true;
+        }
+
+        try {
+            $route = request()->route();
+            if (! $route) return false;
+
+            $name = '';
+            try { $name = (string) $route->getName(); } catch (\Throwable) {}
+            $uri = '';
+            try { $uri = (string) $route->uri(); } catch (\Throwable) {}
+
+            return (
+                ($name !== '' && str_ends_with($name, '.view'))
+                || ($uri === 'risks/{record}')
+            );
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    private static function hasMeaningfulValue(mixed $value): bool
+    {
+        if ($value === null) return false;
+
+        if (is_int($value) || is_float($value)) {
+            return true;
+        }
+
+        $v = trim((string) $value);
+        if ($v === '' || strtolower($v) === 'null') return false;
+
+        return true;
+    }
+
+    /** @param array<int,string> $attributes */
+    private static function recordHasAnyValue(?Tmrisk $record, array $attributes): bool
+    {
+        if (! $record) return false;
+
+        foreach ($attributes as $attr) {
+            try {
+                if (self::hasMeaningfulValue($record->getAttribute($attr))) {
+                    return true;
+                }
+            } catch (\Throwable) {
+            }
+        }
+
+        return false;
     }
 
     private static function status(?Tmrisk $record): int
@@ -54,62 +109,141 @@ class RiskForm
         return $record !== null && self::status($record) >= self::STATUS_TAHAP1_APPROVED;
     }
 
-    /**
-     * Wizard Create: hanya sampai Primary Risk (RSA entry tahap 1)
-     * @return array<int, Step>
-     */
-    public static function wizardStepsForCreate(): array
+    /** @return array<string,string> */
+    private static function yearOptions(?Tmrisk $record = null): array
     {
-        return [
-            Step::make('Identitas Risiko')->schema([
-                self::identitySection(),
-            ]),
-            Step::make('Deskripsi Risiko')->schema([
-                self::descriptionSection(),
-            ]),
-            Step::make('Nilai Dampak')->schema([
-                self::impactValueSection(),
-            ]),
-            Step::make('Primary Risk')->schema([
-                self::primaryRiskSection(),
-            ]),
-        ];
+        $now = (int) now()->format('Y');
+        $years = range($now, $now + 10);
+
+        $recordYear = (int) ($record?->c_risk_year ?? 0);
+        if ($recordYear > 0 && ! in_array($recordYear, $years, true)) {
+            $years[] = $recordYear;
+        }
+
+        sort($years);
+
+        $out = [];
+        foreach ($years as $y) {
+            $out[(string) $y] = (string) $y;
+        }
+
+        return $out;
+    }
+
+    private static function normalizeOrgCode(?string $value): string
+    {
+        $v = strtoupper(trim((string) $value));
+        if ($v === '' || strtolower($v) === 'null') {
+            return '';
+        }
+
+        $v = preg_replace('/[^A-Z]/', '', $v) ?: '';
+        $v = substr($v, 0, 2);
+
+        return strlen($v) === 2 ? $v : '';
+    }
+
+    /** @return array<int,string> */
+    private static function parseImpactString(?string $value): array
+    {
+        $v = trim((string) $value);
+        if ($v === '' || strtolower($v) === 'null') {
+            return [];
+        }
+
+        $parts = preg_split('/\s*\|\s*/', $v) ?: [];
+        $out = [];
+
+        foreach ($parts as $p) {
+            $code = self::normalizeOrgCode($p);
+            if ($code !== '' && ! in_array($code, $out, true)) {
+                $out[] = $code;
+            }
+        }
+
+        return $out;
     }
 
     /**
-     * Wizard Edit:
-     * - sebelum tahap 1 approved: hanya step atas + primary
-     * - setelah tahap 1 approved: step atas readonly + muncul KRI/Exposure editable
-     *
-     * @return array<int, Step>
+     * @param array<int,string> $allCodes
      */
+    private static function buildImpactStringFromList(string $owner, array $allCodes): string
+    {
+        $owner = self::normalizeOrgCode($owner);
+
+        $clean = [];
+        if ($owner !== '') {
+            $clean[] = $owner;
+        }
+
+        foreach ($allCodes as $c) {
+            $cc = self::normalizeOrgCode($c);
+            if ($cc === '' || $cc === $owner) continue;
+            if (! in_array($cc, $clean, true)) {
+                $clean[] = $cc;
+            }
+        }
+
+        return implode(' | ', $clean);
+    }
+
+    /**
+     *
+     * @param array<int,mixed> $tags
+     * @return array<int,string>
+     */
+    private static function sanitizeImpactTags(string $owner, array $tags): array
+    {
+        $owner = self::normalizeOrgCode($owner);
+
+        $clean = [];
+        foreach ($tags as $t) {
+            $cc = self::normalizeOrgCode((string) $t);
+            if ($cc === '') continue;
+            if (! in_array($cc, $clean, true)) {
+                $clean[] = $cc;
+            }
+        }
+
+        $out = [];
+        if ($owner !== '') {
+            $out[] = $owner;
+        }
+
+        foreach ($clean as $c) {
+            if ($c === $owner) continue;
+            $out[] = $c;
+        }
+
+        return $out;
+    }
+
+    /** @return array<int, Step> */
+    public static function wizardStepsForCreate(): array
+    {
+        return [
+            Step::make('Identitas Risiko')->schema([self::identitySection()]),
+            Step::make('Deskripsi Risiko')->schema([self::descriptionSection()]),
+            Step::make('Nilai Dampak')->schema([self::impactValueSection()]),
+            Step::make('Primary Risk')->schema([self::primaryRiskSection()]),
+        ];
+    }
+
+    /** @return array<int, Step> */
     public static function wizardStepsForEdit(?Tmrisk $record = null): array
     {
         $steps = [
-            Step::make('Identitas Risiko')->schema([
-                self::identitySection(),
-            ]),
-            Step::make('Deskripsi Risiko')->schema([
-                self::descriptionSection(),
-            ]),
-            Step::make('Nilai Dampak')->schema([
-                self::impactValueSection(),
-            ]),
+            Step::make('Identitas Risiko')->schema([self::identitySection()]),
+            Step::make('Deskripsi Risiko')->schema([self::descriptionSection()]),
+            Step::make('Nilai Dampak')->schema([self::impactValueSection()]),
         ];
 
         if ($record && self::status($record) >= self::STATUS_TAHAP1_APPROVED) {
-            $steps[] = Step::make('KRI & Threshold')->schema([
-                self::kriSection(),
-            ]);
-
-            $steps[] = Step::make('Periode & Kontrol')->schema([
-                self::exposureAndControlSection(),
-            ]);
+            $steps[] = Step::make('KRI & Threshold')->schema([self::kriSection()]);
+            $steps[] = Step::make('Periode & Kontrol')->schema([self::exposureAndControlSection()]);
         }
 
-        $steps[] = Step::make('Primary Risk')->schema([
-            self::primaryRiskSection(),
-        ]);
+        $steps[] = Step::make('Primary Risk')->schema([self::primaryRiskSection()]);
 
         return $steps;
     }
@@ -134,22 +268,35 @@ class RiskForm
                     ->disabled(fn (?Tmrisk $record) => self::lockTopSteps($record))
                     ->helperText('Dipilih dari level 5 (Dasar Risiko).'),
 
-                TextInput::make('c_risk_year')
+                Select::make('c_risk_year')
                     ->label('Tahun Risiko')
+                    ->options(fn (?Tmrisk $record = null) => self::yearOptions($record))
+                    ->default(fn () => (string) now()->format('Y'))
+                    ->native(false)
+                    ->searchable(false)
                     ->required()
-                    ->maxLength(4)
-                    ->minLength(4)
-                    ->rule('regex:/^[0-9]{4}$/')
-                    ->placeholder('2026')
                     ->disabled(fn (?Tmrisk $record) => self::lockTopSteps($record)),
 
                 TextInput::make('i_risk')
                     ->label('Nomor Risiko')
-                    ->required()
                     ->maxLength(50)
                     ->disabled()
                     ->dehydrated(true)
-                    ->default(fn (?Tmrisk $record = null) => filled($record?->i_risk) ? (string) $record->i_risk : 'null')
+                    ->default('')
+                    ->afterStateHydrated(function (Set $set, $state): void {
+                        $v = trim((string) $state);
+                        if ($v === '' || strtolower($v) === 'null') {
+                            $set('i_risk', '');
+                        }
+                    })
+                    ->formatStateUsing(function ($state): string {
+                        $v = trim((string) $state);
+                        return ($v === '' || strtolower($v) === 'null') ? '' : $v;
+                    })
+                    ->dehydrateStateUsing(function ($state): string {
+                        $v = trim((string) $state);
+                        return ($v === '' || strtolower($v) === 'null') ? '' : $v;
+                    })
                     ->helperText('Nomor Risiko akan digenerate otomatis saat status final tahap tertentu (observer).'),
 
                 Select::make('c_risk_status')
@@ -165,17 +312,77 @@ class RiskForm
                     ->required()
                     ->maxLength(2)
                     ->minLength(2)
-                    ->default(fn (?Tmrisk $record = null) => $record?->c_org_owner ?: RiskApprovalWorkflow::currentUserOrgPrefix())
+                    ->default(fn (?Tmrisk $record = null) => self::normalizeOrgCode(
+                        $record?->c_org_owner ?: RiskApprovalWorkflow::currentUserOrgPrefix()
+                    ))
                     ->disabled()
                     ->dehydrated(true)
-                    ->helperText('Otomatis diisi dari organisasi user yang login (2 huruf awal).'),
+                    ->afterStateHydrated(function (Set $set, $state): void {
+                        $owner = self::normalizeOrgCode((string) $state);
+                        if ($owner !== '' && (string) $state !== $owner) {
+                            $set('c_org_owner', $owner);
+                        }
+                    })
+                    ->helperText('Otomatis diisi dari organisasi user yang login (2 huruf awal).')
+                    ->columnSpan(1),
 
-                TextInput::make('c_org_impact')
+               
+                TagsInput::make('c_org_impact_tags')
                     ->label('Impacted Organization')
-                    ->nullable()
-                    ->maxLength(100)
-                    ->placeholder('Contoh: DIV-OPS / HR / dll')
-                    ->disabled(fn (?Tmrisk $record) => self::lockTopSteps($record)),
+                    ->dehydrated(false)
+                    ->placeholder('Ketik 2 huruf lalu tekan Enter')
+                    ->disabled(fn (?Tmrisk $record) => self::lockTopSteps($record))
+                    ->live()
+                    ->extraAttributes(['class' => 'impacted-org-tags'])
+                    ->extraInputAttributes([
+                        'maxlength' => 2,
+                        'inputmode' => 'text',
+                        'style' => 'text-transform: uppercase;',
+                        'oninput' => "this.value = (this.value || '').toUpperCase().replace(/[^A-Z]/g,'').slice(0,2)",
+                    ])
+                    ->nestedRecursiveRules([
+                        'regex:/^[A-Z]{2}$/',
+                    ])
+                    ->helperText(fn () => new HtmlString(
+                        '<style>
+                            .impacted-org-tags .fi-fo-tags-input-tags-ctn > :first-child .fi-badge-delete-btn {
+                                display: none !important;
+                            }
+                        </style>'
+                    ))
+                    ->afterStateHydrated(function (Set $set, Get $get, $state, ?Tmrisk $record): void {
+                        $owner = self::normalizeOrgCode((string) ($get('c_org_owner') ?? ''));
+
+                        $raw = trim((string) ($record?->c_org_impact ?? ''));
+                        $list = self::parseImpactString($raw);
+
+                        if (empty($list) && $owner !== '') {
+                            $list = [$owner];
+                        }
+
+                        $tags = self::sanitizeImpactTags($owner, $list);
+
+                        $set('c_org_impact_tags', $tags);
+                        $set('c_org_impact', self::buildImpactStringFromList($owner, $tags));
+                    })
+                    ->afterStateUpdated(function (Set $set, Get $get, $state): void {
+                        $owner = self::normalizeOrgCode((string) ($get('c_org_owner') ?? ''));
+                        $tags = is_array($state) ? $state : [];
+
+                        $cleanTags = self::sanitizeImpactTags($owner, $tags);
+
+                        $set('c_org_impact_tags', $cleanTags);
+                        $set('c_org_impact', self::buildImpactStringFromList($owner, $cleanTags));
+                    })
+                    ->columnSpan(1),
+
+                Hidden::make('c_org_impact')
+                    ->dehydrated(true)
+                    ->default(fn (?Tmrisk $record = null) => trim((string) ($record?->c_org_impact ?? '')) !== ''
+                        ? (string) $record->c_org_impact
+                        : self::normalizeOrgCode($record?->c_org_owner ?: RiskApprovalWorkflow::currentUserOrgPrefix())
+                    )
+                    ->columnSpanFull(),
             ]);
     }
 
@@ -240,10 +447,7 @@ class RiskForm
                     ->hiddenLabel()
                     ->native(false)
                     ->required()
-                    ->options([
-                        '1' => 'Yes',
-                        '0' => 'No',
-                    ])
+                    ->options(['1' => 'Yes', '0' => 'No'])
                     ->default('0')
                     ->afterStateHydrated(function (Set $set, $state): void {
                         $set('f_risk_primary', ((bool) $state) ? '1' : '0');
@@ -257,6 +461,19 @@ class RiskForm
     {
         return Section::make('KRI (Key Risk Indicator) & Threshold')
             ->columnSpanFull()
+            ->visible(function (?Tmrisk $record): bool {
+                if (self::isViewPage()) {
+                    return self::recordHasAnyValue($record, [
+                        'e_kri',
+                        'c_kri_unit',
+                        'c_kri_operator',
+                        'v_threshold_safe',
+                        'v_threshold_caution',
+                        'v_threshold_danger',
+                    ]);
+                }
+                return true;
+            })
             ->columns(2)
             ->schema([
                 Textarea::make('e_kri')
@@ -275,13 +492,7 @@ class RiskForm
 
                 Select::make('c_kri_operator')
                     ->label('KRI Operator')
-                    ->options([
-                        '>'  => '>',
-                        '>=' => '>=',
-                        '<'  => '<',
-                        '<=' => '<=',
-                        '='  => '=',
-                    ])
+                    ->options(['>' => '>', '>=' => '>=', '<' => '<', '<=' => '<=', '=' => '='])
                     ->nullable()
                     ->disabled(fn (?Tmrisk $record) => ! self::canEditAfterTahap1($record)),
 
@@ -310,6 +521,16 @@ class RiskForm
     {
         return Section::make('Periode Paparan, & Efektivitas Kontrol')
             ->columnSpanFull()
+            ->visible(function (?Tmrisk $record): bool {
+                if (self::isViewPage()) {
+                    return self::recordHasAnyValue($record, [
+                        'd_exposure_period',
+                        'c_control_effectiveness',
+                        'e_exist_ctrl',
+                    ]);
+                }
+                return true;
+            })
             ->columns(2)
             ->schema([
                 TextInput::make('d_exposure_period')
@@ -336,17 +557,10 @@ class RiskForm
             ]);
     }
 
-    /**
-     * Schema default (untuk Filament Resource::form()).
-     * Ini tetap ada supaya RiskResource::form() tidak error.
-     */
     public static function configure(Schema $schema): Schema
     {
         return $schema
-            ->columns([
-                'default' => 1,
-                'lg' => 1,
-            ])
+            ->columns(['default' => 1, 'lg' => 1])
             ->schema([
                 self::identitySection(),
                 self::descriptionSection(),

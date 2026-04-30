@@ -18,6 +18,8 @@ use Illuminate\Support\HtmlString;
 
 class ScaleMapForm
 {
+    private const CUSTOM_COLOR_KEY = '__custom__';
+
     public static function categoryFromMapValue(?int $value): array
     {
         if (! $value) {
@@ -54,14 +56,103 @@ class ScaleMapForm
 
         foreach (self::colorPalette() as $rgb => $label) {
             $out[$rgb] = (string) new HtmlString(
-                '<span style="display:inline-flex;align-items:center;gap:8px;">
-                    <span style="display:inline-block;width:14px;height:14px;border-radius:4px;border:1px solid rgba(107,114,128,0.8);background:rgb(' . e($rgb) . ');"></span>
-                    <span>' . e($label) . '</span>
-                </span>'
+                '<span style="display:inline-flex;align-items:center;gap:8px;">'
+                . '<span style="display:inline-block;width:14px;height:14px;border-radius:4px;border:1px solid rgba(107,114,128,0.8);background:rgb(' . e($rgb) . ');"></span>'
+                . '<span>' . e($label) . '</span>'
+                . '</span>'
             );
         }
 
         return $out;
+    }
+
+    public static function colorOptionsHtmlWithCustom(?string $customRgb = null): array
+    {
+        $out = self::colorPaletteHtml();
+
+        $swatchRgb = self::isValidRgbString($customRgb) ? (string) $customRgb : '156,163,175';
+        $hexLabel  = self::rgbToHex($customRgb) ?: '#RRGGBB';
+
+        $out[self::CUSTOM_COLOR_KEY] = (string) new HtmlString(
+            '<span style="display:inline-flex;align-items:center;gap:8px;">'
+            . '<span style="display:inline-block;width:14px;height:14px;border-radius:4px;border:1px solid rgba(107,114,128,0.8);background:rgb(' . e($swatchRgb) . ');"></span>'
+            . '<span>Custom - ' . e($hexLabel) . '</span>'
+            . '</span>'
+        );
+
+        return $out;
+    }
+
+    private static function isValidRgbString(?string $rgb): bool
+    {
+        if (! $rgb) return false;
+
+        return (bool) preg_match(
+            '/^\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*$/',
+            (string) $rgb,
+            $m
+        )
+            && ((int) $m[1]) >= 0 && ((int) $m[1]) <= 255
+            && ((int) $m[2]) >= 0 && ((int) $m[2]) <= 255
+            && ((int) $m[3]) >= 0 && ((int) $m[3]) <= 255;
+    }
+
+    private static function normalizeHexColor(?string $hex): ?string
+    {
+        $hex = strtoupper(trim((string) $hex));
+
+        if ($hex === '') {
+            return null;
+        }
+
+        if ($hex[0] !== '#') {
+            $hex = '#' . $hex;
+        }
+
+        if (! preg_match('/^#([0-9A-F]{3}|[0-9A-F]{6})$/', $hex)) {
+            return null;
+        }
+
+        return $hex;
+    }
+
+    public static function hexToRgb(?string $hex): ?string
+    {
+        $hex = self::normalizeHexColor($hex);
+        if (! $hex) return null;
+
+        $h = substr($hex, 1);
+
+        if (strlen($h) === 3) {
+            $h = $h[0] . $h[0] . $h[1] . $h[1] . $h[2] . $h[2];
+        }
+
+        $r = hexdec(substr($h, 0, 2));
+        $g = hexdec(substr($h, 2, 2));
+        $b = hexdec(substr($h, 4, 2));
+
+        return $r . ',' . $g . ',' . $b;
+    }
+
+    public static function rgbToHex(?string $rgb): ?string
+    {
+        if (! self::isValidRgbString($rgb)) {
+            return null;
+        }
+
+        preg_match('/^\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*$/', (string) $rgb, $m);
+
+        $r = max(0, min(255, (int) $m[1]));
+        $g = max(0, min(255, (int) $m[2]));
+        $b = max(0, min(255, (int) $m[3]));
+
+        return sprintf('#%02X%02X%02X', $r, $g, $b);
+    }
+
+    private static function isPaletteColor(?string $rgb): bool
+    {
+        if (! $rgb) return false;
+        return array_key_exists((string) $rgb, self::colorPalette());
     }
 
     private static function unitByScaleType(string $scaleType): string
@@ -85,7 +176,6 @@ class ScaleMapForm
         return $op !== '' ? $op : '-';
     }
 
-    
     private static function groupLabelForScale(Trscale $scale): string
     {
         $code = trim((string) ($scale->v_scale ?? ''));
@@ -100,7 +190,6 @@ class ScaleMapForm
         return "{$code} | {$nilai} | {$ass}";
     }
 
-    
     private static function itemLabelForDetail(Trscaledetail $detail, string $scaleType): string
     {
         $unit = self::unitByScaleType($scaleType);
@@ -114,7 +203,6 @@ class ScaleMapForm
         return "{$score} | {$op} {$bound}{$unit}";
     }
 
-    
     private static function flatLabelForDetail(Trscaledetail $detail): string
     {
         $scaleType = (string) ($detail->scale?->c_scale_type ?? '');
@@ -153,7 +241,7 @@ class ScaleMapForm
 
         $scaleIds = $scales->pluck('i_id_scale')->map(fn ($v) => (int) $v)->all();
 
-         $details = Trscaledetail::query()
+        $details = Trscaledetail::query()
             ->with(['scale'])
             ->whereIn('i_id_scale', $scaleIds)
             ->orderBy('i_id_scale')
@@ -164,14 +252,21 @@ class ScaleMapForm
 
         $out = [];
 
-        foreach ($scales as $scale) {
-            $sid = (int) $scale->i_id_scale;
-            $groupLabel = self::groupLabelForScale($scale);
+        foreach ($scales as $scaleRow) {
+            $scaleModel = $scaleRow instanceof Trscale
+                ? $scaleRow
+                : (new Trscale())->forceFill((array) $scaleRow);
+
+            $sid = (int) ($scaleModel->i_id_scale ?? 0);
+            if ($sid <= 0) {
+                continue;
+            }
+
+            $groupLabel = self::groupLabelForScale($scaleModel);
 
             /** @var \Illuminate\Support\Collection<int,Trscaledetail> $rows */
             $rows = $detailsByScale->get($sid, collect());
 
-           
             if ($rows->isEmpty()) {
                 continue;
             }
@@ -202,7 +297,24 @@ class ScaleMapForm
                                 $current = $get('c_map');
 
                                 $set('_color_overridden', $current && $auto && $current !== $auto);
+
+                                if ($current) {
+                                    if (self::isPaletteColor((string) $current)) {
+                                        $set('c_map_choice', (string) $current);
+                                        $set('c_map_custom_hex', null);
+                                    } else {
+                                        $set('c_map_choice', self::CUSTOM_COLOR_KEY);
+                                        $set('c_map_custom_hex', self::rgbToHex((string) $current));
+                                    }
+                                } elseif ($auto) {
+                                    $set('c_map_choice', (string) $auto);
+                                    $set('c_map', (string) $auto);
+                                    $set('c_map_custom_hex', null);
+                                }
                             }),
+
+                        Hidden::make('c_map')
+                            ->required(),
 
                         ViewField::make('heatmap_preview')
                             ->label('')
@@ -308,13 +420,12 @@ class ScaleMapForm
                                 ];
                             }),
 
-                        
                         Select::make('i_id_scale_a')
                             ->label('Detail Skala A (Dampak)')
                             ->native(false)
                             ->searchable()
                             ->placeholder('Cari kode / nilai / asumsi...')
-                           ->options(fn () => self::groupedDetailOptions('1', null, 25))
+                            ->options(fn () => self::groupedDetailOptions('1', null, 25))
                             ->getSearchResultsUsing(fn (string $search) => self::groupedDetailOptions('1', $search, 50))
                             ->getOptionLabelUsing(function ($value): ?string {
                                 if (! $value) return null;
@@ -330,7 +441,6 @@ class ScaleMapForm
                             ->live()
                             ->afterStateUpdated(fn (Set $set, Get $get) => self::syncMapValueAndColor($set, $get)),
 
-                        
                         Select::make('i_id_scale_b')
                             ->label('Detail Skala B (Kemungkinan)')
                             ->native(false)
@@ -361,20 +471,91 @@ class ScaleMapForm
                             ->required()
                             ->helperText('Otomatis: Skor(A) x Skor(B).'),
 
-                        Select::make('c_map')
+                        Select::make('c_map_choice')
                             ->label('Warna (RGB)')
-                            ->options(self::colorPaletteHtml())
+                            ->options(fn (Get $get) => self::colorOptionsHtmlWithCustom((string) ($get('c_map') ?? '')))
                             ->allowHtml()
                             ->searchable()
                             ->required()
+                            ->dehydrated(false)
                             ->live()
                             ->afterStateUpdated(function (Set $set, Get $get, $state) {
+                                if (! $state) {
+                                    return;
+                                }
+
                                 $mapValue = (int) ($get('i_map') ?? 0);
                                 $auto = self::categoryFromMapValue($mapValue)['defaultColor'] ?? null;
 
-                                if ($auto && $state) {
-                                    $set('_color_overridden', ((string) $state !== (string) $auto));
+                                if ((string) $state === self::CUSTOM_COLOR_KEY) {
+                                    $hex = trim((string) ($get('c_map_custom_hex') ?? ''));
+
+                                    if ($hex === '') {
+                                        $baseRgb = (string) ($get('c_map') ?: ($auto ?: '156,163,175'));
+                                        $hex = self::rgbToHex($baseRgb) ?: '';
+                                        if ($hex !== '') {
+                                            $set('c_map_custom_hex', $hex);
+                                        }
+                                    }
+
+                                    $rgb = self::hexToRgb($hex);
+                                    if ($rgb) {
+                                        $set('c_map', $rgb);
+                                        $set('_color_overridden', $auto ? ((string) $rgb !== (string) $auto) : true);
+                                    }
+
+                                    return;
                                 }
+
+                                $set('c_map', (string) $state);
+                                $set('c_map_custom_hex', null);
+                                $set('_color_overridden', $auto ? ((string) $state !== (string) $auto) : true);
+                            }),
+
+                        
+                        TextInput::make('c_map_custom_hex')
+                            ->label('Custom (Hex)')
+                            ->placeholder('#FFFFFF')
+                            ->helperText('Masukkan kode hex: #RGB atau #RRGGBB. Contoh: #FFFFFF')
+                            ->dehydrated(false)
+                            ->visible(fn (Get $get) => (string) ($get('c_map_choice') ?? '') === self::CUSTOM_COLOR_KEY)
+                            ->required(fn (Get $get) => (string) ($get('c_map_choice') ?? '') === self::CUSTOM_COLOR_KEY)
+                            ->rule('regex:/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/')
+                            ->live()
+                            ->afterStateUpdated(function (Set $set, Get $get, $state) {
+                                $normalized = self::normalizeHexColor((string) $state);
+                                if ($normalized) {
+                                    $set('c_map_custom_hex', $normalized);
+                                }
+
+                                $rgb = self::hexToRgb((string) ($normalized ?: $state));
+                                if (! $rgb) {
+                                    return;
+                                }
+
+                                $set('c_map', $rgb);
+
+                                $mapValue = (int) ($get('i_map') ?? 0);
+                                $auto = self::categoryFromMapValue($mapValue)['defaultColor'] ?? null;
+
+                                $set('_color_overridden', $auto ? ((string) $rgb !== (string) $auto) : true);
+                            }),
+
+                        ViewField::make('c_map_custom_preview')
+                            ->label('') // no label, biar clean di kolom kanan
+                            ->view('filament.forms.components.color-preview-swatch')
+                            ->dehydrated(false)
+                            ->visible(fn (Get $get) => (string) ($get('c_map_choice') ?? '') === self::CUSTOM_COLOR_KEY)
+                            ->viewData(function (Get $get) {
+                                $rgb = (string) ($get('c_map') ?? '');
+                                return [
+                                    'data' => [
+                                        'rgb' => $rgb !== '' ? $rgb : null,
+                                        'hex' => self::rgbToHex($rgb),
+                                        // turunkan isi preview supaya sejajar dengan field input (bukan sejajar label)
+                                        'offset' => true,
+                                    ],
+                                ];
                             }),
 
                         Textarea::make('n_map')
@@ -405,6 +586,8 @@ class ScaleMapForm
 
         if (! $overridden && $autoColor) {
             $set('c_map', $autoColor);
+            $set('c_map_choice', $autoColor);
+            $set('c_map_custom_hex', null);
         }
     }
 }

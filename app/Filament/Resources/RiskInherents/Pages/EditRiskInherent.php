@@ -10,7 +10,7 @@ class EditRiskInherent extends EditRecord
 {
     protected static string $resource = RiskInherentResource::class;
 
-    protected function getActions(): array
+    protected function getHeaderActions(): array
     {
         return [
             Actions\DeleteAction::make()

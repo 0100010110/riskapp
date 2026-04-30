@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\RiskInherents\Tables;
 
 use App\Filament\Resources\RiskInherents\RiskInherentResource;
+use App\Services\EmployeeCacheService;
 use Filament\Actions;
 use Filament\Notifications\Notification;
 use Filament\Support\Icons\Heroicon;
@@ -49,6 +50,73 @@ class RiskInherentsTable
                 <span>' . e(self::colorName($rgb)) . '</span>
             </span>'
         );
+    }
+
+    protected static function employeeNameFromRow(?array $row): string
+    {
+        if (! is_array($row)) {
+            return '';
+        }
+
+        return trim((string) ($row['nama'] ?? $row['name'] ?? $row['n_name'] ?? ''));
+    }
+
+    protected static function employeeRowByNik(string $nik, EmployeeCacheService $svc): ?array
+    {
+        $nik = trim($nik);
+
+        if ($nik === '') {
+            return null;
+        }
+
+        try {
+            foreach ($svc->data() as $row) {
+                if (! is_array($row)) {
+                    continue;
+                }
+
+                if (trim((string) ($row['nik'] ?? '')) === $nik) {
+                    return $row;
+                }
+            }
+        } catch (\Throwable) {
+            return null;
+        }
+
+        return null;
+    }
+
+    protected static function resolveCreatedByName($state): string
+    {
+        if ($state === null || $state === '') {
+            return '-';
+        }
+
+        $raw = trim((string) $state);
+
+        if ($raw === '') {
+            return '-';
+        }
+
+        try {
+            $svc = app(EmployeeCacheService::class);
+
+            $row = null;
+
+            if (ctype_digit($raw)) {
+                $row = $svc->findById((int) $raw);
+            }
+
+            if (! is_array($row)) {
+                $row = self::employeeRowByNik($raw, $svc);
+            }
+
+            $name = self::employeeNameFromRow($row);
+
+            return $name !== '' ? $name : $raw;
+        } catch (\Throwable) {
+            return $raw;
+        }
     }
 
     public static function configure(Table $table): Table
@@ -98,7 +166,9 @@ class RiskInherentsTable
                     ->alignCenter(),
 
                 Tables\Columns\TextColumn::make('i_entry')
-                    ->label('Created By'),
+                    ->label('Created By')
+                    ->formatStateUsing(fn ($state): string => self::resolveCreatedByName($state))
+                    ->searchable(),
 
                 Tables\Columns\TextColumn::make('d_entry')
                     ->label('Created At')

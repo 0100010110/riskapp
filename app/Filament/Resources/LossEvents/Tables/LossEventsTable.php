@@ -2,14 +2,17 @@
 
 namespace App\Filament\Resources\LossEvents\Tables;
 
+use App\Filament\Resources\LossEvents\LossEventResource;
 use App\Models\Tmlostevent;
 use App\Support\TaxonomyFormatter;
 use Carbon\Carbon;
 use Filament\Actions;
+use Filament\Notifications\Notification;
 use Filament\Support\Icons\Heroicon;
 use Filament\Tables;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\QueryException;
 
 class LossEventsTable
 {
@@ -83,11 +86,33 @@ class LossEventsTable
             ])
             ->recordActions([
                 Actions\ActionGroup::make([
-                    Actions\EditAction::make(),
+                    Actions\EditAction::make()
+                        ->visible(fn ($record) => LossEventResource::canEdit($record)),
+
+                    Actions\DeleteAction::make()
+                        ->visible(fn ($record) => LossEventResource::canDelete($record))
+                        ->requiresConfirmation()
+                        ->modalHeading('Delete Loss Event')
+                        ->modalDescription('Data loss event draft akan dihapus permanen dari database. Lanjutkan?')
+                        ->action(function ($record) {
+                            try {
+                                $record->delete();
+                            } catch (QueryException) {
+                                Notification::make()
+                                    ->danger()
+                                    ->title('Tidak bisa menghapus')
+                                    ->body('Record loss event masih direferensikan tabel lain (foreign key).')
+                                    ->send();
+                            }
+                        }),
                 ])
                     ->icon(Heroicon::OutlinedBars3)
                     ->label('')
-                    ->tooltip('Actions'),
+                    ->tooltip('Actions')
+                    ->visible(fn ($record) =>
+                        LossEventResource::canEdit($record) ||
+                        LossEventResource::canDelete($record)
+                    ),
             ]);
     }
 }

@@ -4,6 +4,7 @@ namespace App\Support;
 
 use App\Models\Trrole;
 use App\Models\Truserrole;
+use App\Policies\SuperadminPolicy;
 use App\Services\EmployeeCacheService;
 use Filament\Facades\Filament;
 use Illuminate\Database\Eloquent\Builder;
@@ -12,7 +13,6 @@ use App\Filament\Resources\Risks\RiskResource;
 use App\Models\Tmrisk;
 use App\Services\RolePermissionService;
 use App\Support\PermissionBitmask;
-
 
 class RiskApprovalWorkflow
 {
@@ -26,8 +26,6 @@ class RiskApprovalWorkflow
 
     public const ROLE_TYPE_OFFICER = self::ROLE_TYPE_RISK_OFFICER;
     public const ROLE_TYPE_GRC     = self::ROLE_TYPE_ADMIN_GRC;
-
-    private const SUPERADMIN_USER_ID = 2542;
 
     /** @var array<string,mixed>|null */
     protected static ?array $cachedContext = null;
@@ -129,7 +127,7 @@ class RiskApprovalWorkflow
             ->where('f_active', true)
             ->where(function (Builder $b) {
                 $b->whereRaw("LOWER(COALESCE(c_role,'')) LIKE ?", ['%superadmin%'])
-                  ->orWhereRaw("LOWER(COALESCE(n_role,'')) LIKE ?", ['%superadmin%']);
+                    ->orWhereRaw("LOWER(COALESCE(n_role,'')) LIKE ?", ['%superadmin%']);
             })
             ->orderByRaw("
                 CASE
@@ -171,7 +169,13 @@ class RiskApprovalWorkflow
 
         $userId = (int) ($user?->getAuthIdentifier() ?? 0);
 
-        $isSuperAdminReal = ($userId === self::SUPERADMIN_USER_ID);
+        // ✅ real superadmin pakai policy (Racka / allowlist / dll)
+        $isSuperAdminReal = false;
+        try {
+            $isSuperAdminReal = SuperadminPolicy::isSuperadmin($user);
+        } catch (\Throwable) {
+            $isSuperAdminReal = false;
+        }
 
         $roleType = null;
         $roleId   = null;
@@ -249,6 +253,7 @@ class RiskApprovalWorkflow
         $effectiveRoleType = $isSuperAdminReal ? null : $roleType;
         $effectiveOrgPrefix = $orgPrefixReal;
 
+        // simulasi hanya untuk real superadmin
         if ($isSuperAdminReal) {
             $sim = static::getSimulateState();
             $simRole = strtolower(trim((string) ($sim['role_type'] ?? self::ROLE_TYPE_SUPERADMIN)));
@@ -800,48 +805,75 @@ class RiskApprovalWorkflow
             || (str_contains($text, 'approval') && str_contains($text, 'grc'));
     }
 
+   
+    public static function editableStatusesForCurrentUser(): array
+{
+    $ctx = static::context();
 
-        /**
-     * SPECIAL RULE:
-     * - User tanpa READ risk tetap boleh edit risk jika datang dari approval (?from=approval)
-     * - Syarat: punya UPDATE (4) menu Risk Register + punya akses menu Risk Approval + risk ada di scope approval
-     */
-    public static function canEditRiskOnApproval(\App\Models\Tmrisk $risk): bool
-    {
-        $from = '';
-        try {
-            $from = strtolower(trim((string) request()->query('from', '')));
-        } catch (\Throwable) {
-            $from = '';
-        }
-
-        if ($from !== 'approval') {
-            return false;
-        }
-
-        if (! RiskApprovalResource::canViewAny()) {
-            return false;
-        }
-
-        try {
-            $perm = app(RolePermissionService::class);
-            if (! $perm->can(RiskResource::getMenuIdentifiers(), PermissionBitmask::UPDATE)) {
-                return false;
-            }
-        } catch (\Throwable) {
-            return false;
-        }
-
-        $riskId = (int) ($risk->getKey() ?? 0);
-        if ($riskId <= 0) {
-            return false;
-        }
-
-        $q = Tmrisk::query()->whereKey($riskId);
-        $q = static::applyApprovalListScope($q);
-
-        return $q->exists();
+    if ($ctx['is_superadmin']) {
+        return [0, 1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17];
     }
 
+    return match ($ctx['role_type']) {
+        static::ROLE_TYPE_RSA_ENTRY    => [0],
+        static::ROLE_TYPE_RISK_OFFICER => [0, 4, 9, 13],
+        static::ROLE_TYPE_KADIV        => [1, 6, 10, 14],
+        static::ROLE_TYPE_ADMIN_GRC    => [2, 7, 11, 15],
+        static::ROLE_TYPE_APPROVAL_GRC => [3, 8, 12, 16],
+        default                        => [],
+    };
+}
 
+public static function canEditRiskDataForCurrentUser(\App\Models\Tmrisk $risk): bool
+{
+    $ctx = static::context();
+
+    if (! $ctx['is_superadmin']) {
+        $editable = static::editableStatusesForCurrentUser();
+        $status = (int) ($risk->c_risk_status ?? 0);
+
+        if (! in_array($status, $editable, true)) {
+            return false;
+        }
+    }
+
+    $riskId = (int) ($risk->getKey() ?? 0);
+    if ($riskId <= 0) {
+        return false;
+    }
+
+    $q = Tmrisk::query()->whereKey($riskId);
+    $q = static::applyRiskRegisterScope($q);
+
+    return $q->exists();
+}
+
+public static function canEditRiskOnApproval(\App\Models\Tmrisk $risk): bool
+{
+    $from = '';
+    try {
+        $from = strtolower(trim((string) request()->query('from', '')));
+    } catch (\Throwable) {
+        $from = '';
+    }
+
+    if ($from !== 'approval') {
+        return false;
+    }
+
+    if (! RiskApprovalResource::canViewAny()) {
+        return false;
+    }
+
+    try {
+        $perm = app(RolePermissionService::class);
+        if (! $perm->can(RiskResource::getMenuIdentifiers(), PermissionBitmask::UPDATE)) {
+            return false;
+        }
+    } catch (\Throwable) {
+        return false;
+    }
+
+    return static::canEditRiskDataForCurrentUser($risk);
+}
 }

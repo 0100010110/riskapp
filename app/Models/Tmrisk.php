@@ -223,4 +223,18 @@ class Tmrisk extends TrBaseModel
 
         return $name;
     }
+
+
+    public function getIRiskAttribute($value): string
+    {
+        $v = trim((string) $value);
+        return ($v === '' || strtolower($v) === 'null') ? '' : (string) $value;
+    }
+
+
+    public function setIRiskAttribute($value): void
+    {
+        $v = trim((string) ($value ?? ''));
+        $this->attributes['i_risk'] = ($v === '' || strtolower($v) === 'null') ? '' : (string) $value;
+    }
 }

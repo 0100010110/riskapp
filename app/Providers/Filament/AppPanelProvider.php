@@ -4,6 +4,7 @@ namespace App\Providers\Filament;
 
 use App\Http\Middlewares\Authenticate;
 use Filament\Actions\Action;
+use Filament\Enums\GlobalSearchPosition;
 use Filament\Http\Middleware\AuthenticateSession;
 use Filament\Http\Middleware\DisableBladeIconComponents;
 use Filament\Http\Middleware\DispatchServingFilamentEvent;
@@ -35,7 +36,7 @@ class AppPanelProvider extends PanelProvider
                 'primary' => Color::Amber,
             ])
 
-            ->globalSearch(false)
+            ->globalSearch(true, GlobalSearchPosition::Topbar)
 
             ->navigationGroups([
                 'Risk',
@@ -43,6 +44,9 @@ class AppPanelProvider extends PanelProvider
                 'Skala',
                 'Settings',
             ])
+
+            // aktifkan warning perubahan belum disimpan
+            ->unsavedChangesAlerts()
 
             ->discoverResources(in: app_path('Filament/Resources'), for: 'App\\Filament\\Resources')
             ->discoverPages(in: app_path('Filament/Pages'), for: 'App\\Filament\\Pages')

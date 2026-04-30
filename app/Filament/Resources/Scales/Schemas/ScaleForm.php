@@ -39,6 +39,33 @@ class ScaleForm
         return ((string) $scaleType === '2') ? 'SK' : 'DK';
     }
 
+    private static function normalizePrefix(?string $prefix, ?string $scaleType = null): string
+    {
+        $prefix = strtoupper(trim((string) $prefix));
+
+        if ($prefix === '') {
+            $prefix = self::prefixByScaleType($scaleType);
+        }
+
+        return $prefix;
+    }
+
+    private static function normalizeSuffix(mixed $suffix): string
+    {
+        $suffix = (string) $suffix;
+        $suffix = preg_replace('/\s+/', '', $suffix) ?? '';
+
+        return strtoupper(trim($suffix));
+    }
+
+    private static function buildStoredCode(?string $prefix, mixed $suffix, ?string $scaleType = null): string
+    {
+        $prefix = self::normalizePrefix($prefix, $scaleType);
+        $suffix = self::normalizeSuffix($suffix);
+
+        return $prefix . $suffix;
+    }
+
     private static function parsePrefixFromStored(?string $stored, ?string $scaleType): array
     {
         $stored = trim((string) $stored);
@@ -46,35 +73,25 @@ class ScaleForm
         if (preg_match('/^(SK|DP|DK)\s*/i', $stored, $m)) {
             $prefix = strtoupper($m[1]);
             $suffix = preg_replace('/^(SK|DP|DK)\s*/i', '', $stored) ?? '';
-            return [$prefix, trim($suffix)];
+
+            return [$prefix, self::normalizeSuffix($suffix)];
         }
 
         $prefix = self::prefixByScaleType($scaleType);
-        return [$prefix, $stored];
+
+        return [$prefix, self::normalizeSuffix($stored)];
     }
 
-    private static function syncStoredCode(Set $set, Get $get): void
-    {
-        $prefix = strtoupper(trim((string) $get('code_prefix')));
-        $suffix = trim((string) $get('code_suffix'));
-
-        if ($prefix === '') {
-            $prefix = self::prefixByScaleType($get('c_scale_type'));
-            $set('code_prefix', $prefix);
-        }
-
-        $set('v_scale', $prefix . $suffix);
-    }
-
-    
     private static function nextDetailScore(Get $get): int
     {
-        $items = $get('../../details'); 
+        $items = $get('../../details');
+
         if (! is_array($items)) {
             return 1;
         }
 
         $max = 0;
+
         foreach ($items as $row) {
             if (! is_array($row)) continue;
 
@@ -114,9 +131,8 @@ class ScaleForm
                             ->live()
                             ->formatStateUsing(fn ($state) => $state === null ? '1' : (string) $state)
                             ->dehydrateStateUsing(fn ($state) => (string) $state)
-                            ->afterStateUpdated(function ($state, Set $set, Get $get): void {
+                            ->afterStateUpdated(function ($state, Set $set): void {
                                 $set('code_prefix', self::prefixByScaleType((string) $state));
-                                self::syncStoredCode($set, $get);
                             }),
 
                         ToggleButtons::make('f_scale_finance')
@@ -128,7 +144,6 @@ class ScaleForm
                             ->inline()
                             ->required()
                             ->default('0')
-                            ->live()
                             ->formatStateUsing(fn ($state) => $state === null ? '0' : (string) ((int) $state))
                             ->dehydrateStateUsing(fn ($state) => (int) $state),
 
@@ -137,8 +152,7 @@ class ScaleForm
                             ->numeric()
                             ->required()
                             ->minValue(0)
-                            ->maxValue(999999999)
-                            ->live(),
+                            ->maxValue(999999999),
 
                         Hidden::make('v_scale')
                             ->required()
@@ -150,7 +164,13 @@ class ScaleForm
 
                                 $set('code_prefix', $prefix);
                                 $set('code_suffix', $suffix);
-                                $set('v_scale', $prefix . $suffix);
+                            })
+                            ->dehydrateStateUsing(function ($state, Get $get): string {
+                                return self::buildStoredCode(
+                                    (string) $get('code_prefix'),
+                                    $get('code_suffix'),
+                                    (string) $get('c_scale_type')
+                                );
                             }),
 
                         Grid::make(12)
@@ -166,12 +186,9 @@ class ScaleForm
                                 TextInput::make('code_suffix')
                                     ->label('Kode')
                                     ->required()
-                                    ->maxLength(18) 
+                                    ->maxLength(18)
                                     ->dehydrated(false)
-                                    ->live()
-                                    ->afterStateUpdated(function ($state, Set $set, Get $get): void {
-                                        self::syncStoredCode($set, $get);
-                                    })
+                                    ->autocomplete(false)
                                     ->columnSpan(9),
                             ]),
 
